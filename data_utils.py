@@ -1,33 +1,57 @@
-def normalize_data(data):
-    """
-    Normalize the data to a common scale.
-    Raises: ValueError if data is not a list or if it's empty.
-    """
-    if not isinstance(data, list) or len(data) == 0:
-        raise ValueError("Input must be a non-empty list.")
+# data_utils.py
 
-    min_val = min(data)
-    max_val = max(data)
-    range_val = max_val - min_val
+def normalize_company(company_name):
+    # Implementation for normalizing company names
+    pass
 
-    if range_val == 0:
-        return [0.0 for _ in data]
+def normalize_plate(plate):
+    # Implementation for normalizing vehicle plates
+    pass
 
-    normalized = [(x - min_val) / range_val for x in data]
-    return normalized
+def normalize_name(name):
+    # Implementation for normalizing a single name
+    pass
 
+def normalize_names_cell(names_cell):
+    # Implementation for normalizing names from a cell
+    pass
 
-def parse_data(data_str):
-    """
-    Parse a comma-separated string of data into a list of floats.
-    Raises: ValueError if the input is empty or not valid.
-    """
-    if not data_str:
-        raise ValueError("Input string cannot be empty.")
+def parse_sn(sn):
+    # Implementation for parsing serial numbers
+    pass
 
-    try:
-        data_list = [float(value) for value in data_str.split(",")]
-    except ValueError:
-        raise ValueError("Invalid value found in input string.")
+def sample_to_datestr(sample):
+    # Implementation for converting sample to date string
+    pass
 
-    return data_list
+def parse_sn_date(sn_date):
+    # Implementation for parsing serial number date
+    pass
+
+def parse_sn_team(sn_team):
+    # Implementation for parsing team information from serial numbers
+    pass
+
+def extract_sn_text(sn_text):
+    # Implementation for extracting text from serial numbers
+    pass
+
+def parse_time(time_str):
+    # Implementation for parsing time from string
+    pass
+
+def parse_time_range(time_range_str):
+    # Implementation for parsing time ranges
+    pass
+
+def excel_value_to_time(excel_value):
+    # Implementation for converting Excel time values to time objects
+    pass
+
+def parse_time_range_text(time_range_text):
+    # Implementation for parsing time range text
+    pass
+
+def norm_ymd(date_str):
+    # Implementation for normalizing YMD date strings
+    pass
