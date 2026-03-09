@@ -146,7 +146,28 @@ def rg_set_cell_by_keys(driver, tr, col_idx: int, text: str):
     ae.send_keys(text)
     ae.send_keys(Keys.ENTER)
     time.sleep(0.03)
+
+
+def rg_paste_to_tr_tab4(driver, tr, start_col: int, values):
+    """
+    Tab4 전용: 이미 선택된 상태에서 바로 붙여넣기
+    (붙여넣기 전 선택이나 편집 모드 진입 안 함 - eco_input.py에서 이미 선택 완료)
+    """
+    tsv = "\t".join("" if v is None else str(v) for v in values)
     
+    pyperclip.copy(tsv)
+    try:
+        ae = driver.switch_to.active_element
+        ae.send_keys(Keys.CONTROL, "v")
+        time.sleep(0.03)
+        ae.send_keys(Keys.ENTER)
+    except:
+        send_keys("^v")
+        time.sleep(0.03)
+        send_keys("{ENTER}")
+    
+    time.sleep(0.03)
+
     
 # =====================================================================
 # RealGrid API 공통 자바스크립트 로직 (그리드 탐색 및 헤더 매핑)

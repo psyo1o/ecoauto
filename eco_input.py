@@ -60,7 +60,7 @@ from format_utils import format_time as trim_hm, to_f1, to_f2
 from data_utils import sample_to_datestr
 from realgrid_utils import (
     rg_dump_headers, rg_find_col, rg_find_cols, rg_get_body, rg_api_write_data, 
-    rg_scroll_top, rg_find_tr_by_item, rg_paste_to_tr, rg_set_cell_by_keys
+    rg_scroll_top, rg_find_tr_by_item, rg_paste_to_tr, rg_paste_to_tr_tab4, rg_set_cell_by_keys
 )
 from select2_utils import Select2Handler as _Select2Handler
 from pdf_utils import merge_pdfs as _merge_pdfs, PDFExporter as _PDFExporter
@@ -204,9 +204,8 @@ def read_tab4_from_macro_xlsm(sample_no: str) -> dict:
             rows.append(row_vals)
 
 
-        # ✅ 디버그(문제 추적용) - 필요하면 켜
-        # print(f"[TAB4-EXCEL] updated={ok}, A9='{ws.Range('A9').Text}', rows={len(rows)}")
-        print(f"[TAB4-EXCEL] A9='{ws.Range('A9').Text}', rows={len(rows)}")
+        # 탭4 엑셀 행 수만 로그
+        print(f"[TAB4-EXCEL] rows={len(rows)}")
         return {"rcpt_dt": rcpt_dt, "start_src": start_src, "end_dt": end_dt, "rows": rows}
 
 
@@ -759,62 +758,193 @@ def _norm_rg(s: str) -> str:
     return " ".join(s.split())
 
 
-def tab4_find_tr_by_item(driver, item_name: str, step=650, max_tries=200):
+def tab4_find_tr_by_item(driver, item_name: str, max_steps=600):
     """
-    탭4 RealGrid:
-    - 가상 스크롤 → 화면에 렌더된 tr만 존재
-    - 항목은 3열 td 안 div.rg-renderer
+    탭4 RealGrid 탐색(ArrowDown/ArrowUp 다중 이동):
+    - 현재 화면의 보이는 행에서 먼저 탐색
+    - 없으면 ArrowDown을 10칸씩 이동하며 탐색
+    - 아래 끝 도달 시 ArrowUp으로 10칸씩 올라가며 재탐색
     """
     grid = driver.find_element(By.CSS_SELECTOR, TAB4_GRID_ROOT)
     body = grid.find_element(By.CSS_SELECTOR, "div.rg-body")
-
     target = _norm_rg(item_name)
 
-    # 맨 위로
-    driver.execute_script("arguments[0].scrollTop = 0;", body)
-    time.sleep(0.08)
+    # 전체 페이지 기준으로 그리드를 먼저 중앙에 맞춤
+    # (off-screen 상태에서 클릭 시 1칸 밀림 완화)
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block:'center', inline:'nearest'});", grid)
+        time.sleep(0.08)
+    except:
+        pass
 
-    last_top = -1
-    for _ in range(max_tries):
+    def _scan_visible():
         trs = body.find_elements(By.CSS_SELECTOR, "table > tbody > tr")
-        for tr in trs:
+        first_txt, last_txt = "", ""
+        for idx, tr in enumerate(trs):
             try:
                 cell = tr.find_element(By.CSS_SELECTOR, "td:nth-child(3) > div")
                 txt = _norm_rg(cell.text)
+                if idx == 0:
+                    first_txt = txt
+                last_txt = txt
                 if txt == target:
-                    return tr
+                    return tr, first_txt, last_txt
             except:
                 continue
+        return None, first_txt, last_txt
 
-        # 아래로 스크롤
-        driver.execute_script("arguments[0].scrollTop = arguments[0].scrollTop + arguments[1];", body, step)
-        time.sleep(0.06)
+    def _send_arrows(key, count):
+        try:
+            for _ in range(count):
+                driver.switch_to.active_element.send_keys(key)
+                time.sleep(0.02)
+            return True
+        except:
+            try:
+                for _ in range(count):
+                    ActionChains(driver).send_keys(key).perform()
+                    time.sleep(0.02)
+                return True
+            except:
+                return False
 
-        cur_top = driver.execute_script("return arguments[0].scrollTop;", body)
-        if cur_top == last_top:
+    # 키 입력 포커스 확보
+    try:
+        first_tr = body.find_element(By.CSS_SELECTOR, "table > tbody > tr:first-child")
+        first_cell = first_tr.find_element(By.CSS_SELECTOR, "td:nth-child(3) > div")
+        ActionChains(driver).move_to_element(first_cell).click(first_cell).perform()
+        time.sleep(0.05)
+    except:
+        try:
+            ActionChains(driver).move_to_element(body).click(body).perform()
+            time.sleep(0.05)
+        except:
+            pass
+
+    # 0) 현재 화면 먼저 확인
+    tr_now, _, _ = _scan_visible()
+    if tr_now:
+        return tr_now
+
+    # 화면 변화가 일정 횟수 이상 없으면 끝으로 판단
+    visible_rows = len(body.find_elements(By.CSS_SELECTOR, "table > tbody > tr"))
+    stable_limit = max(8, visible_rows // 2)
+
+    # 1) ArrowDown 15칸씩 탐색
+    _, prev_first, prev_last = _scan_visible()
+    down_stable = 0
+    for _ in range(max_steps):
+        if not _send_arrows(Keys.ARROW_DOWN, 15):
             break
-        last_top = cur_top
+        time.sleep(0.3)
+
+        tr_found, cur_first, cur_last = _scan_visible()
+        if tr_found:
+            time.sleep(0.08)
+            return tr_found
+
+        if cur_first == prev_first and cur_last == prev_last:
+            down_stable += 1
+            if down_stable >= stable_limit:
+                break
+        else:
+            down_stable = 0
+            prev_first, prev_last = cur_first, cur_last
+
+    # 2) ArrowUp 15칸씩 재탐색
+    _, prev_first, prev_last = _scan_visible()
+    up_stable = 0
+    for _ in range(max_steps):
+        if not _send_arrows(Keys.ARROW_UP, 15):
+            break
+        time.sleep(0.3)
+
+        tr_found, cur_first, cur_last = _scan_visible()
+        if tr_found:
+            time.sleep(0.08)
+            return tr_found
+
+        if cur_first == prev_first and cur_last == prev_last:
+            up_stable += 1
+            if up_stable >= stable_limit:
+                break
+        else:
+            up_stable = 0
+            prev_first, prev_last = cur_first, cur_last
 
     return None
 
 def tab4_paste_row_using_tab2(driver, tr, values_A_to_M):
     """
     values_A_to_M: 엑셀 A~M (13개)
-    탭2에서 쓰던 rg_paste_to_tr 그대로 재사용.
+    Tab4 전용 - rg_paste_to_tr_tab4 사용 (move_to_element 없음)
     """
     # 1차: 3열(측정항목)부터
     try:
-        rg_paste_to_tr(driver, tr, start_col=3, values=values_A_to_M)
+        rg_paste_to_tr_tab4(driver, tr, start_col=3, values=values_A_to_M)
         return True
     except:
         pass
 
     # 2차: 4열부터(3열이 뭔가 막혔을 때 대비)
     try:
-        rg_paste_to_tr(driver, tr, start_col=4, values=values_A_to_M)
+        rg_paste_to_tr_tab4(driver, tr, start_col=4, values=values_A_to_M)
         return True
     except:
         return False
+
+
+def tab4_get_api_items(driver):
+    """
+    탭4 RealGrid API에서 전체 항목명 목록 추출.
+    - 가능하면 DataSource 전체 row를 읽고
+    - 실패 시 현재 화면 렌더 행만 fallback으로 수집
+    """
+    try:
+        data = driver.execute_script(
+            """
+            const root = document.querySelector(arguments[0]);
+            const gv = window.measGridViews && window.measGridViews.gridView1 ? window.measGridViews.gridView1 : null;
+            if (!gv) return {count: 0, items: []};
+
+            let items = [];
+            try {
+                const ds = (typeof gv.getDataSource === 'function') ? gv.getDataSource() : null;
+                if (ds && typeof ds.getRowCount === 'function') {
+                    const cnt = ds.getRowCount();
+                    for (let i = 0; i < cnt; i++) {
+                        let v = "";
+                        try {
+                            if (typeof ds.getValue === 'function') v = ds.getValue(i, 'anze_item');
+                        } catch (e) {}
+                        try {
+                            if ((v === null || v === undefined || v === "") && typeof gv.getValue === 'function') {
+                                v = gv.getValue(i, 'anze_item');
+                            }
+                        } catch (e) {}
+                        items.push(v == null ? "" : String(v));
+                    }
+                    return {count: cnt, items};
+                }
+            } catch (e) {}
+
+            // fallback: 현재 화면에 보이는 항목만
+            try {
+                if (!root) return {count: 0, items: []};
+                const cells = root.querySelectorAll('div.rg-body table > tbody > tr td:nth-child(3) > div');
+                const arr = Array.from(cells).map(el => (el.innerText || '').trim());
+                return {count: arr.length, items: arr};
+            } catch (e) {
+                return {count: 0, items: []};
+            }
+            """,
+            TAB4_GRID_ROOT,
+        )
+        if isinstance(data, dict):
+            return data
+    except:
+        pass
+    return {"count": 0, "items": []}
 
 
 
@@ -825,6 +955,8 @@ def fill_tab4_grid_only(driver, table_rows):
     - B~M: 탭4에 붙여넣을 데이터(열 순서가 탭4와 동일하게 맞춰져 있음)
     - 숨김행은 이미 read_tab4...에서 걸러진 상태라고 가정
     """
+    # 엑셀 항목 정리
+    rows_to_input = []
     for r in table_rows:
         item = _norm_rg(r[0])
         if not item:
@@ -834,14 +966,69 @@ def fill_tab4_grid_only(driver, table_rows):
         if all(v == "" for v in values):
             continue
 
-        tr = tab4_find_tr_by_item(driver, item)
-        if not tr:
-            print(f"⚠[탭4] 항목 행 못찾음: {item}")
-            continue
+        rows_to_input.append((item, values))
 
-        ok = tab4_paste_row_using_tab2(driver, tr, values)
-        if not ok:
-            print(f"⚠[탭4] 붙여넣기 실패: {item}")
+    # API 항목 수집
+    api_data = tab4_get_api_items(driver)
+    api_items_raw = api_data.get("items", []) if isinstance(api_data, dict) else []
+    api_count = int(api_data.get("count", len(api_items_raw))) if isinstance(api_data, dict) else len(api_items_raw)
+    excel_count = len(rows_to_input)
+
+    print(f"[탭4-카운트] API 항목 {api_count}개 / 엑셀 항목 {excel_count}개")
+
+    ok_count = 0
+    failed = []
+    fail_reason = []
+
+    for idx, (item, values) in enumerate(rows_to_input, start=1):
+        paste_ok = False
+        last_error = None
+
+        # 최대 3회 재시도
+        for attempt in range(3):
+            tr = tab4_find_tr_by_item(driver, item, max_steps=2000)
+            if not tr:
+                last_error = "행탐색실패"
+                continue
+
+            # 찾은 TR을 직접 클릭해서 선택
+            cell = None
+            try:
+                cell = tr.find_element(By.CSS_SELECTOR, "td:nth-child(3) > div")
+                ActionChains(driver).move_to_element(cell).click(cell).perform()
+                time.sleep(0.15)
+            except:
+                last_error = "클릭실패"
+                continue
+
+            # 붙여넣기 시도
+            ok = tab4_paste_row_using_tab2(driver, tr, values)
+            if not ok:
+                last_error = "붙여넣기실패"
+                continue
+
+            # 성공
+            ok_count += 1
+            print(f"   [입력 {idx}/{excel_count}] {item}")
+            paste_ok = True
+            break
+
+        # 3회 모두 실패한 경우
+        if not paste_ok:
+            failed.append(item)
+            if last_error:
+                fail_reason.append((item, last_error))
+                print(f"   [미적용 {idx}/{excel_count}] {item} ({last_error})")
+            else:
+                fail_reason.append((item, "미상"))
+                print(f"   [미적용 {idx}/{excel_count}] {item}")
+
+    print(f"[탭4-결과] 성공 {ok_count}개 / 실패 {len(failed)}개")
+    if failed:
+        rs = {}
+        for _, reason in fail_reason:
+            rs[reason] = rs.get(reason, 0) + 1
+        print("   ↳ 실패 원인: " + ", ".join([f"{k} {v}개" for k, v in rs.items()]))
 
 
 
@@ -2457,7 +2644,7 @@ def _main_air():
                     print("✅ 탭4 입력완료")
                 else:
                     tab4_temp_save(driver)
-                    print("  탭4 임시저장")
+                    print("⚠ 탭4임시저장")
 
                 if pdfs:
                     cleanup_tmp_pdfs(PDF_TMP_DIR, sample)
