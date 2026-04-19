@@ -172,9 +172,25 @@ class ReportCheckFileListGUI:
         top.columnconfigure(1, weight=1)
 
         ttk.Label(top, text="이름(결과 저장용):").grid(row=0, column=0, sticky="w")
-        self.ent_name = ttk.Entry(top)
-        self.ent_name.grid(row=0, column=1, sticky="ew", padx=6)
+        
+        # ✅ [추가] NAS 개인업무 폴더를 뒤져서 직원 이름(폴더명) 목록을 자동으로 가져오기
+        base_dir = r"\\192.168.10.163\개인업무"
+        user_list = []
+        try:
+            if os.path.exists(base_dir):
+                # ✅ [수정] 폴더이면서 동시에 이름 맨 앞글자가 '#', '.', '_' 가 아닌 것만 골라내기
+                user_list = [
+                    d for d in os.listdir(base_dir) 
+                    if os.path.isdir(os.path.join(base_dir, d)) and not d.startswith(('#', '.', '_', '0'))
+                ]
+                user_list.sort() # 가나다순 정렬
+        except Exception:
+            pass
 
+        # ✅ [수정] 일반 입력창(Entry) 대신 드롭다운(Combobox) 사용
+        self.ent_name = ttk.Combobox(top, values=user_list, state="readonly")
+        self.ent_name.grid(row=0, column=1, sticky="ew", padx=6)
+        
         # 2) 파일 리스트
         mid = ttk.LabelFrame(outer, text="성적서 엑셀 파일", padding=10)
         mid.grid(row=1, column=0, sticky="nsew", pady=(10, 10))
@@ -349,7 +365,7 @@ class ReportCheckFileListGUI:
     def _on_run(self):
         user_name = self.ent_name.get().strip()
         if not user_name:
-            messagebox.showerror("오류", "이름을 입력하세요.")
+            messagebox.showerror("오류", "이름을 선택하세요.(없을시 개인업무에서 폴더 추가)")
             return
         if not self.files:
             messagebox.showerror("오류", "엑셀 파일을 1개 이상 추가하세요.")
@@ -361,8 +377,8 @@ class ReportCheckFileListGUI:
         for p in self.files:
             sn = extract_sample_from_name(p)
             if sn:
-                if sn not in sample_list:
-                    sample_list.append(sn)
+                if not any(item[0] == sn for item in sample_list):
+                    sample_list.append((sn, p))
             else:
                 bad.append(os.path.basename(p))
 

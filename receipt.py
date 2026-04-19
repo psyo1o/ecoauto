@@ -1,3 +1,10 @@
+# -*- coding: utf-8 -*-
+"""
+발송대장 검토 모듈
+- 시료번호별 상태(수분/THC/PDF/백데이터 등) 확인
+- 발송대장 엑셀과 NAS 파일 상태를 비교하여 보고서 생성
+- GUI(App 클래스)와 로직(process_daejang)이 한 파일에 통합
+"""
 import os
 import re
 import io
@@ -29,6 +36,11 @@ warnings.filterwarnings(
     category=UserWarning,
     message="Conditional Formatting extension is not supported and will be removed"
 )
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message="Data Validation extension is not supported and will be removed"
+)
 
 # ============================================================
 # 공통 유틸 모듈 (모듈화)
@@ -48,6 +60,7 @@ REPORT_DIRS = ["0 0.입력중", "0 1.완료", "0 2.검토중", "0 3.검토완료
 MOISTURE_DIR = "0.수분량"
 THC_DIR = "0.THC"
 OUTPUT_ROOT = r"\\192.168.10.163\측정팀\10.검토\2.발송대장 검토"
+DAEJANG_DEFAULT_DIR = r"\\192.168.10.163\측정팀\0.시료접수발송대장"
 
 # ★ 샘플 파일(폴더 고정, 파일명만 맞춰두면 됨)
 #   - 수분 CSV 샘플: 0.수분량\수분량샘플.csv
@@ -895,6 +908,7 @@ class App:
     def browse_file(self):
         path = filedialog.askopenfilename(
             title="시료접수발송대장(대기) 파일 선택",
+            initialdir=DAEJANG_DEFAULT_DIR,
             filetypes=[("Excel Files", "*.xlsx;*.xlsm;*.xls")]
         )
         if path:

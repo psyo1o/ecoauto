@@ -61,10 +61,21 @@ def format_float(value: Union[str, int, float, None],
         return default
 
 
+def format_float_fixed(value, decimal_places: int = 4, default: str = "") -> str:
+    """항상 고정 소수점 자릿수로 포맷 (trailing zero 유지, 예: 0.0280 → '0.0280')"""
+    if value is None or value == "":
+        return default
+    try:
+        f = float(str(value).replace(",", ""))
+        return f"{f:.{decimal_places}f}"
+    except:
+        return default
+
 # 호환성 래퍼
 trim_hm = lambda t: format_time(t, include_seconds=False)
 to_f1 = lambda v: format_float(v, decimal_places=1)
 to_f2 = lambda v: format_float(v, decimal_places=2)
+to_f4 = lambda v: format_float_fixed(v, decimal_places=4)
 trim_time_to_hm = lambda t: format_time(t, include_seconds=False)
 to_float1 = lambda v: format_float(v, decimal_places=1)
 to_float2 = lambda v: format_float(v, decimal_places=2)

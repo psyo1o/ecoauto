@@ -47,7 +47,7 @@ from selenium_utils import (
     init_driver, safe_click, wait_el, set_date_js,
     accept_all_alerts as _accept_all_alerts,
     accept_all_alerts as _accept_alerts_base,
-    close_popup
+    close_popup, wait
 )
 from measin_utils import (
     login, search_date, wait_grid_loaded,
@@ -57,7 +57,7 @@ from measin_utils import (
     LOGIN_URL, FIELD_URL, NAS_BASE, NAS_DIRS
 )
 from format_utils import format_time as trim_hm, to_f1, to_f2
-from data_utils import sample_to_datestr
+from data_utils import sample_to_datestr, clean_leading_mark as clean
 from realgrid_utils import (
     rg_dump_headers, rg_find_col, rg_find_cols, rg_get_body, rg_api_write_data, 
     rg_scroll_top, rg_find_tr_by_item, rg_paste_to_tr, rg_paste_to_tr_tab4, rg_set_cell_by_keys
@@ -68,24 +68,34 @@ from excel_utils import find_sheet_by_candidates as _find_sheet_by_candidates
 from file_utils import find_excel_for_sample as _find_excel_util
 from excel_com_utils import get_excel_app, kill_excel_app
 from log_utils import log_error
+from measin_constants import (
+    SKIP_VOL_AND_SPEED, SKIP_SPEED_ONLY, HEAVY_METALS,
+    SM3_ITEMS as sm3_items,
+    SEL_DATE, SEL_START_TIME, SEL_END_TIME,
+    SEL_O2_STD, SEL_O2_MEAS, SEL_GAS_VOL_PRE, SEL_GAS_VOL_POST,
+    SEL_MOISTURE, SEL_GAS_TEMP, SEL_GAS_SPEED
+)
+from backdata_utils import (
+    export_backdata_moist_thc, export_csv_display_as_is, export_fid_by_excel_copy
+)
+from tab4_utils import (
+    read_tab4_from_macro_xlsm, fill_tab4_dates, fill_tab4_grid_only,
+    tab4_find_tr_by_item, tab4_get_api_items, tab4_paste_row_using_tab2,
+    tab4_temp_save, tab4_comp_save,
+    TAB4_SELECTOR, TAB4_GRID_ROOT
+)
 
 # =====================================================================
 # 설정
 # =====================================================================
+#===============================팝업닫기========================
 
+POPUP_CLOSE_SEL = "body > div > div > div.modal-body > div.modal-footer.row > form > input"
 
 # PDF 임시 생성 폴더(로컬 권장: 업로드 창에서 경로 인식/권한 문제 줄어듦)
 PDF_TMP_DIR = r"C:\measin_upload_tmp"
 
-# 백데이터 저장 루트
-MOIST_ROOT = r"\\192.168.10.163\측정팀\2.성적서\0.수분량"
-THC_ROOT   = r"\\192.168.10.163\측정팀\2.성적서\0.THC"
-
-ANZE_XLSM = r"\\192.168.10.163\측정팀\2.성적서\측정인 측정분석 입력 26.01.xlsm"
-ANZE_SHEET = "00. 측정분석결과 입력샘플"
-
-TAB4_SELECTOR = "#ui-id-4"
-TAB4_GRID_ROOT = "#gridAnalySampAnzeDataAirItemList1"
+# 백데이터/탭4 상수 → backdata_utils.py, tab4_utils.py 에서 import 완료
 
 TAB4_FILE_BTN1 = "#newFile1"   # 시험 분석일지(PDF) 업로드 버튼(열기창)
 TAB4_FILE_BTN2 = "#newFile2"   # 측정기록부(PDF) 업로드 버튼(열기창)
@@ -113,549 +123,14 @@ import win32clipboard  # 기존 로직 유지용
 # ======================== Excel COM 재사용(전역) ========================
 _EXCEL_APP = None
 
-# Excel 상수(Win32 상수값)
-XL_UP = -4162
-XL_TOLEFT = -4159
-
-
-
-# ========================측정분석 입력 엑셀 ========================
-def wait_until_sheet_updates(ws, timeout=10.0):
-    """
-    A6 입력 후 표가 갱신될 때까지 대기.
-    기준: A9 텍스트가 빈칸이 아니고, 이전 값과 달라지는 시점.
-    """
-    end = time.time() + timeout
-    before = str(ws.Range("A9").Text).strip()
-
-    while time.time() < end:
-        try:
-            ws.Parent.Application.Calculate()
-        except:
-            pass
-
-        cur = str(ws.Range("A9").Text).strip()
-        if cur and cur != before:
-            return True
-        time.sleep(0.2)
-
-    return False
-
-def _cell_text(ws, addr: str) -> str:
-    try:
-        return str(ws.Range(addr).Text).strip()
-    except:
-        v = ws.Range(addr).Value
-        return "" if v is None else str(v).strip()
-
-
-def read_tab4_from_macro_xlsm(sample_no: str) -> dict:
-    excel = get_excel_app()
-    wb = None
-    try:
-        # ✅ 이벤트/경고 설정 (Calculation은 건드리지 말자 - 너 에러났음)
-        excel.DisplayAlerts = False
-        excel.EnableEvents = True
-        try:
-            excel.AutomationSecurity = 1  # msoAutomationSecurityLow
-        except:
-            pass
-
-        wb = excel.Workbooks.Open(ANZE_XLSM, ReadOnly=True, UpdateLinks=0)
-        ws = wb.Worksheets(ANZE_SHEET)
-
-        # ✅ A6 입력
-        ws.Range("A6").Value = sample_no
-
-        # ✅ 계산/갱신 트리거
-        try:
-            excel.CalculateFullRebuild()
-        except:
-            try:
-                excel.Calculate()
-            except:
-                pass
-
-        # ✅ 표 갱신 대기 (없으면 rows가 0으로 나옴)
-        ok = wait_until_sheet_updates(ws, timeout=10.0)
-
-        # 날짜/시간 (Text로)
-        rcpt_dt = str(ws.Range("I6").Text).strip()
-        start_src = str(ws.Range("I7").Text).strip()
-        end_dt = str(ws.Range("K7").Text).strip()
-
-        # ✅ A9:M54 읽기 - 숨김행 스킵
-        rows = []
-        cols = "ABCDEFGHIJKLM"
-
-        for excel_row in range(9, 55):
-            try:
-                if ws.Rows(excel_row).Hidden:
-                    continue
-            except:
-                pass
-
-            row_vals = [_cell_text(ws, f"{c}{excel_row}") for c in cols]  # ✅ A..M 모두 Text
-
-            item = row_vals[0].strip()
-            if not item:
-                continue
-
-            rows.append(row_vals)
-
-
-        # 탭4 엑셀 행 수만 로그
-        print(f"[TAB4-EXCEL] rows={len(rows)}")
-        return {"rcpt_dt": rcpt_dt, "start_src": start_src, "end_dt": end_dt, "rows": rows}
-
-
-    finally:
-        try: wb.Close(SaveChanges=False)
-        except: pass
-        ws_out = None
-        wb = None
-
-
-# ======================== 클립보드 유틸(공통) ========================
-# ======================== 클립보드 유틸(공통) 및 파일 저장 안전망 ========================
-
-def _clipboard_clear():
-    """클립보드 충돌 방지를 위한 재시도 로직 적용"""
-    for _ in range(4):
-        try:
-            win32clipboard.OpenClipboard()
-            win32clipboard.EmptyClipboard()
-            win32clipboard.CloseClipboard()
-            return
-        except:
-            try: win32clipboard.CloseClipboard()
-            except: pass
-            time.sleep(0.15)
-
-def _clipboard_get_unicode_text():
-    """클립보드 읽기 재시도 로직 적용"""
-    for _ in range(4):
-        try:
-            win32clipboard.OpenClipboard()
-            try:
-                if win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_UNICODETEXT):
-                    return win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
-                if win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_TEXT):
-                    b = win32clipboard.GetClipboardData(win32clipboard.CF_TEXT)
-                    return b.decode("cp949", errors="ignore")
-                return ""
-            finally:
-                win32clipboard.CloseClipboard()
-        except:
-            time.sleep(0.15)
-    return ""
-
-def _copy_range_and_get_text(excel_app, rng, wait_max=3.0, retries=4):
-    """✅ Range.Copy() → 클립보드 텍스트를 폴링해서 가져옴(재시도/에러 무시 로직 대폭 강화)"""
-    for attempt in range(retries):
-        try: excel_app.CutCopyMode = False
-        except: pass
-        _clipboard_clear()
-
-        # 복사 시도
-        try:
-            rng.Copy()
-        except:
-            time.sleep(0.3)
-            try: rng.Copy()
-            except: pass
-
-        # 클립보드 폴링
-        end = time.time() + float(wait_max)
-        txt = ""
-        while time.time() < end:
-            time.sleep(0.1)
-            txt = _clipboard_get_unicode_text()
-            if txt and txt.strip():
-                break
-
-        # 성공했으면 복사모드 해제 후 리턴
-        if txt and txt.strip():
-            try: excel_app.CutCopyMode = False
-            except: pass
-            _clipboard_clear()
-            return txt
-
-        # 실패 시 약간 대기 후 다음 시도(attempt)
-        time.sleep(0.5)
-
-    try: excel_app.CutCopyMode = False
-    except: pass
-    _clipboard_clear()
-    return ""
-
-def _safe_write_file(path, text, encoding="utf-8-sig", newline="", retries=4):
-    """네트워크 드라이브(NAS) 접근 지연 및 권한 오류 방지용 안전 쓰기"""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    for attempt in range(retries):
-        try:
-            with open(path, "w", encoding=encoding, newline=newline) as f:
-                f.write(text)
-            return True
-        except Exception as e:
-            if attempt == retries - 1:
-                raise RuntimeError(f"파일 저장 4회 시도 실패 ({path}): {e}")
-            time.sleep(0.5)  # NAS 지연 대기 후 재시도
-    return False
-
-def _year_month_folder_from_sample(sample_no: str):
-    """
-    sample_no: AYYMMDDT-XX 에서
-    YYYY, 'M월' 폴더명 반환
-    """
-    ds = sample_to_datestr(sample_no)  # 너 코드에 이미 있음
-    if not ds:
-        return None, None
-    yyyy, mm, _ = ds.split("-")
-    mm_int = int(mm)
-    return yyyy, f"{mm_int}월"
-
-# ======================== 수분 CSV(표시값 그대로) ========================
-def _export_moist_csv_from_open_ws(excel_app, ws, out_csv_path: str, max_rows=None):
-    """
-    ✅ '열린 ws(엑셀 COM)'에서 표시값을 복사해서 CSV로 저장
-    - 날짜/시간/소수점 등 표시 서식 유지
-    - 탭 → 콤마
-    """
-    os.makedirs(os.path.dirname(out_csv_path), exist_ok=True)
-
-    # 마지막 행/열(값 기준, 빠름)
-    last_row = ws.Cells(ws.Rows.Count, 1).End(XL_UP).Row
-    last_col = ws.Cells(1, ws.Columns.Count).End(XL_TOLEFT).Column
-
-    if max_rows is not None:
-        last_row = min(int(max_rows), int(last_row))
-
-    if last_row < 1:
-        last_row = 1
-    if last_col < 1:
-        last_col = 1
-
-    rng = ws.Range(ws.Cells(1, 1), ws.Cells(last_row, last_col))
-    txt = _copy_range_and_get_text(excel_app, rng, wait_max=3.0)
-
-    if not txt or not txt.strip():
-        raise RuntimeError("클립보드에서 수분 데이터를 복사해오지 못했습니다. (엑셀 응답 없음)")
-        
-    # 탭 → 콤마
-    txt = txt.replace("\t", ",")
-    # 줄바꿈 정리(윈도우 CRLF 유지)
-    txt = txt.replace("\r\n", "\n").replace("\r", "\n")
-    txt = "\r\n".join(txt.split("\n"))
-
-    _safe_write_file(out_csv_path, txt, encoding="utf-8-sig", newline="")
-
-    return out_csv_path
-
-
-def export_csv_display_as_is(excel_path: str, sheet_name: str, out_csv_path: str, max_rows=None):
-    """
-    ✅ (외부에서도 쓸 수 있게 유지) 엑셀 파일 열어서 표시값 CSV 저장
-    - 내부적으로는 Excel App 재사용
-    """
-    excel = get_excel_app()
-    wb = None
-    try:
-        wb = excel.Workbooks.Open(excel_path, ReadOnly=True, UpdateLinks=0)
-        ws = wb.Worksheets(sheet_name)
-        return _export_moist_csv_from_open_ws(excel, ws, out_csv_path, max_rows=max_rows)
-    finally:
-        try:
-            if wb is not None:
-                try:
-                    excel.CutCopyMode = False
-                except:
-                    pass
-                wb.Close(False)
-        except:
-            pass
-
-
-# ======================== THC PF → FID(150행 고정, 복사 기반) ========================
-def _export_pf_fid_from_open_ws(excel_app, ws, out_fid_path: str, fixed_rows=150):
-    """
-    ✅ 열린 ws(엑셀 COM)에서 150행 고정으로 복사한 텍스트를 .FID로 저장
-    """
-    os.makedirs(os.path.dirname(out_fid_path), exist_ok=True)
-
-    last_col = ws.UsedRange.Columns.Count
-    if not last_col or last_col < 1:
-        last_col = 1
-
-    rng = ws.Range(ws.Cells(1, 1), ws.Cells(int(fixed_rows), int(last_col)))
-    txt = _copy_range_and_get_text(excel_app, rng, wait_max=3.0)
-
-    if not txt or not txt.strip():
-        raise RuntimeError("클립보드에서 THC(PF) 데이터를 복사해오지 못했습니다.")
-
-    # 안전 저장 유틸 사용
-    _safe_write_file(out_fid_path, txt, encoding="utf-8-sig", newline="")
-
-    return out_fid_path
-
-
-def export_fid_by_excel_copy(excel_path: str, sheet_name: str, out_fid_path: str):
-    """
-    ✅ (기존 시그니처 유지) 엑셀 열어서 PF 시트 복사→FID 저장
-    - 내부적으로 Excel App 재사용
-    """
-    excel = get_excel_app()
-    wb = None
-    try:
-        wb = excel.Workbooks.Open(excel_path, ReadOnly=True, UpdateLinks=0)
-        ws = wb.Worksheets(sheet_name)
-        return _export_pf_fid_from_open_ws(excel, ws, out_fid_path, fixed_rows=150)
-    finally:
-        try:
-            if wb is not None:
-                try:
-                    excel.CutCopyMode = False
-                except:
-                    pass
-                wb.Close(False)
-        except:
-            pass
-
-
-# ======================== THC CSV(openpyxl) - 너 기존 그대로 ========================
-def _safe_str(v):
-    if v is None:
-        return ""
-    if isinstance(v, datetime):
-        return v.strftime("%Y-%m-%d %H:%M:%S")
-    return str(v)
-
-
-def _used_range_bounds(ws):
-    max_row = 1
-    max_col = 1
-    for row in ws.iter_rows(values_only=False):
-        for cell in row:
-            if cell.value is not None and str(cell.value).strip() != "":
-                if cell.row > max_row:
-                    max_row = cell.row
-                if cell.column > max_col:
-                    max_col = cell.column
-    return max_row, max_col
-
-
-def _export_ws_to_csv(ws, out_csv_path, encoding="utf-8-sig"):
-    last_r, last_c = _used_range_bounds(ws)
-    os.makedirs(os.path.dirname(out_csv_path), exist_ok=True)
-
-    def q(s):
-        s = _safe_str(s)
-        if any(ch in s for ch in [",", '"', "\n", "\r"]):
-            s = s.replace('"', '""')
-            return f'"{s}"'
-        return s
-
-    lines = []
-    for r in range(1, last_r + 1):
-        row_vals = [q(ws.cell(r, c).value) for c in range(1, last_c + 1)]
-        while row_vals and row_vals[-1] == "":
-            row_vals.pop()
-        lines.append(",".join(row_vals).rstrip())
-
-    while lines and lines[-1].strip() == "":
-        lines.pop()
-
-    text_data = "\n".join(lines)
-    _safe_write_file(out_csv_path, text_data, encoding=encoding, newline="\n")
-
-
-# ======================== export_backdata_moist_thc (최적화 적용) ========================
-def export_backdata_moist_thc(excel_path: str, sample_no: str):
-    """
-    ✅ 규칙 그대로 + 최적화:
-    - openpyxl로 조건 판단
-    - 수분/THC PF(FID) 둘 중 하나라도 필요하면
-      Excel 파일을 "한 번만 Open → 필요한 시트들 처리 → Close"
-    - Excel 앱은 전역 1개 재사용(프로그램 끝에서 close_excel_app()로 닫기)
-    """
-    # ✅ 비산먼지 스킵
-    if ("비산먼지" in os.path.basename(excel_path)) or ("비산" in os.path.basename(excel_path)):
-        print("▶ 비산먼지 성적서 → 백데이터 스킵")
-        return
-
-    yyyy, mm_folder = _year_month_folder_from_sample(sample_no)  # 너 기존 함수 그대로 사용
-    if not yyyy:
-        print(f"⚠ 백데이터: 시료번호 날짜 파싱 실패 → {sample_no}")
-        return
-    print(f"▶백데이터: 시료번호 {sample_no} 진행중")
-    # ---- 1) openpyxl로 조건 판단(빠름) ----
-    wb = load_workbook(excel_path, data_only=True)
-    
-    # 수분 조건
-    need_moist = False
-    try:
-        ws_in = wb["입력"] if "입력" in wb.sheetnames else None
-        if ws_in is not None:
-            b18 = "" if ws_in["B18"].value is None else str(ws_in["B18"].value).strip()
-            need_moist = (b18 == "사용") and ("수분량자동측정" in wb.sheetnames)
-    except:
-        need_moist = False
-
-    # THC 조건
-    ws_an = None
-    if "입력(분석값)" in wb.sheetnames:
-        ws_an = wb["입력(분석값)"]
-    else:
-        for n in wb.sheetnames:
-            if n.replace(" ", "") == "입력(분석값)".replace(" ", ""):
-                ws_an = wb[n]
-                break
-
-    need_thc = False
-    is_fid_mode = False
-    if ws_an is not None:
-        a64 = "" if ws_an["A64"].value is None else str(ws_an["A64"].value).strip()
-        if a64 != "":
-            need_thc = True
-            c65 = ws_an["C65"].value
-            try:
-                is_fid_mode = (int(float(c65)) == 1)
-            except:
-                is_fid_mode = (str(c65).strip() == "1")
-
-    # ---- 2) 엑셀 COM은 "필요할 때만" 파일 1회 Open/Close ----
-    excel = None
-    wb_xl = None
-    try:
-        if need_moist or (need_thc and not is_fid_mode):
-            excel = get_excel_app()
-            wb_xl = excel.Workbooks.Open(excel_path, ReadOnly=True, UpdateLinks=0)
-
-        # -----------------------
-        # (A) 수분 CSV (표시값 그대로)
-        # -----------------------
-        try:
-            if need_moist:
-                out_dir = os.path.join(MOIST_ROOT, yyyy, mm_folder)   # 너 기존 상수 그대로
-                out_csv = os.path.join(out_dir, f"{sample_no}.csv")
-
-                ws_m_xl = wb_xl.Worksheets("수분량자동측정")
-                _export_moist_csv_from_open_ws(excel, ws_m_xl, out_csv, max_rows=6)  # max_rows=6 유지
-                print(f"✅ 수분 CSV 저장: {out_csv}")
-            else:
-                # 기존 로그 스타일 유지
-                if ws_in is None:
-                    print("⚠ 수분: '입력' 시트 없음 → 스킵")
-                else:
-                    b18 = "" if ws_in["B18"].value is None else str(ws_in["B18"].value).strip()
-                    if b18 != "사용":
-                        print("▶ 수분: 입력!B18 != '사용' → 스킵")
-                    elif "수분량자동측정" not in wb.sheetnames:
-                        print("⚠ 수분: '수분량자동측정' 시트 없음 → 스킵")
-        except Exception as e:
-            print(f"❌ 수분 백데이터 실패: {e}")
-
-        # -----------------------
-        # (B) THC
-        # -----------------------
-        try:
-            if not need_thc:
-                if ws_an is None:
-                    print("⚠ THC: '입력(분석값)' 시트 없음 → 스킵")
-                else:
-                    print("▶ THC: 입력(분석값)!A64 빈칸 → 스킵")
-                return
-
-            out_dir = os.path.join(THC_ROOT, yyyy, mm_folder)  # 너 기존 상수 그대로
-            os.makedirs(out_dir, exist_ok=True)
-
-            if is_fid_mode:
-                # C65==1 → THC 측정값(FID) → CSV (openpyxl 그대로)
-                sheet_name = "THC 측정값(FID)"
-                if sheet_name not in wb.sheetnames:
-                    cand = [n for n in wb.sheetnames if n.replace(" ", "") == sheet_name.replace(" ", "")]
-                    if cand:
-                        sheet_name = cand[0]
-                    else:
-                        print(f"⚠ THC: 시트 없음({sheet_name}) → 스킵")
-                        return
-
-                ws_t = wb[sheet_name]
-                out_csv = os.path.join(out_dir, f"{sample_no}.csv")
-                _export_ws_to_csv(ws_t, out_csv)
-                print(f"✅ THC(FID모드) CSV 저장: {out_csv}")
-
-            else:
-                # C65!=1 → THC 측정값(PF) → .FID (Excel 복사 기반, 150행 고정)
-                sheet_name = "THC 측정값(PF)"
-                # 시트명 보정(최소)
-                try:
-                    ws_pf_xl = wb_xl.Worksheets(sheet_name)
-                except:
-                    # 공백 제거 매칭
-                    ws_pf_xl = None
-                    for sh in wb_xl.Worksheets:
-                        if str(sh.Name).replace(" ", "") == sheet_name.replace(" ", ""):
-                            ws_pf_xl = sh
-                            break
-                    if ws_pf_xl is None:
-                        print(f"⚠ THC: 시트 없음({sheet_name}) → 스킵")
-                        return
-
-                out_fid = os.path.join(out_dir, f"{sample_no}.FID")
-                _export_pf_fid_from_open_ws(excel, ws_pf_xl, out_fid, fixed_rows=150)
-                print(f"✅ THC(PF모드) FID 저장: {out_fid}")
-
-        except Exception as e:
-            print(f"❌ THC 백데이터 실패: {e}")
-
-    finally:
-        # ✅ 시료 1개당 workbook은 닫는다 (한번만 열고 닫자)
-        try:
-            if wb_xl is not None:
-                try:
-                    excel.CutCopyMode = False
-                except:
-                    pass
-                wb_xl.Close(False)
-        except:
-            pass
-
-    # ✅ Excel 앱은 전역 재사용이므로 여기서 Quit 안 함
-    # 프로그램 끝에서 close_excel_app() 한 번 호출(또는 atexit 자동)
-
+# XL_UP, XL_TOLEFT → backdata_utils.py 로 이동
+# wait_until_sheet_updates, _cell_text, read_tab4_from_macro_xlsm → tab4_utils.py 로 이동
+# 클립보드 유틸(_clipboard_clear 등) → backdata_utils.py 로 이동
 
 
 # =====================================================================
-# RealGrid 예외 규칙(전역)
+# RealGrid 예외 규칙 → measin_constants.py 에서 import 완료
 # =====================================================================
-
-SKIP_VOL_AND_SPEED = {
-    "매연", "황산화물", "질소산화물", "일산화탄소", "총탄화수소"
-}
-
-SKIP_SPEED_ONLY = {
-    "먼지", "비소화합물", "수은화합물", "구리화합물", "아연화합물", "카드뮴화합물",
-    "납화합물", "크로뮴화합물", "니켈화합물", "베릴륨화합물", "벤조(a)피렌"
-}
-
-def make_dust_per_item(excel_path: str) -> dict:
-    """
-    비산먼지용 per_item 생성
-    - 항목은 그리드/엑셀에 무엇으로 있든, 결국 '비산먼지' 1개만 넣는 방식(가장 안전)
-    """
-    dv = read_dust_realgird_values(excel_path)  # 너가 이미 만든 함수
-    return {
-        "비산먼지": {
-            "시작시간": dv.get("시작시간", ""),
-            "종료시간": dv.get("종료시간", ""),
-            "시료채취량": dv.get("시료채취량", ""),
-            "흡인속도": dv.get("흡인속도", ""),
-            "채취량단위": dv.get("채취량단위", "L"),
-            "흡인속도단위": dv.get("흡인속도단위", "L/min"),
-        }
-    }
-
 
 def rg2_fill_measure_grid_api(driver, sample_no: str, per_item: dict):
     """RealGrid API로 직접 입력 (js 모듈화 완료)"""
@@ -693,343 +168,9 @@ def rg2_fill_measure_grid_api(driver, sample_no: str, per_item: dict):
             print("   -", x)
     return result
 
-def fill_tab2_realgird_dust_only(driver, excel_path: str, sample_no: str, grid_root_css: str):
-    """
-    ✅ 비산먼지 전용: RealGrid에서 '비산먼지' 행만 찾아서
-       시료채취량/단위/흡인속도/단위/날짜/시간을 셀 하나씩 입력.
-    - '먼지'로 대체하지 않음. 없으면 즉시 에러.
-    """
-    date_str = sample_to_datestr(sample_no)
-    if not date_str:
-        raise RuntimeError("시료번호에서 날짜 파싱 실패")
 
-    dv = read_dust_realgird_values(excel_path)
-    vol   = dv.get("시료채취량", "")
-    vol_u = dv.get("채취량단위", "L")
-    spd   = dv.get("흡인속도", "")
-    spd_u = dv.get("흡인속도단위", "L/min")
-    st    = dv.get("시작시간", "")
-    et    = dv.get("종료시간", "")
-
-    # 컬럼 찾기
-    c_item = rg_find_col(driver, grid_root_css, ["측정항목"])
-    c_vol  = rg_find_col(driver, grid_root_css, ["시료채취량"])
-    c_spd  = rg_find_col(driver, grid_root_css, ["흡인속도"])
-    c_sd   = rg_find_col(driver, grid_root_css, ["측정일(시작)"])
-    c_st   = rg_find_col(driver, grid_root_css, ["시작시간"])
-    c_ed   = rg_find_col(driver, grid_root_css, ["측정일(종료)"])
-    c_et   = rg_find_col(driver, grid_root_css, ["종료시간"])
-
-    unit_cols = rg_find_cols(driver, grid_root_css, "단위")
-    c_vol_u = unit_cols[0] if len(unit_cols) >= 1 else (c_vol + 1 if c_vol else None)
-    c_spd_u = unit_cols[1] if len(unit_cols) >= 2 else (c_spd + 1 if c_spd else None)
-
-    need = [c_item, c_vol, c_vol_u, c_spd, c_spd_u, c_sd, c_st, c_ed, c_et]
-    if any(x is None for x in need):
-        raise RuntimeError(f"[비산먼지] 컬럼 탐색 실패: {rg_dump_headers(driver, grid_root_css)}")
-
-    # ✅ '비산먼지' 행만 찾기 (fallback 없음)
-    tr = rg_find_tr_by_item(driver, grid_root_css, c_item, "비산먼지")
-    if not tr:
-        # 디버그용: 현재 화면에 보이는 항목들만이라도 출력
-        try:
-            visible = rg_list_items(driver, grid_root_css, c_item)
-        except:
-            visible = "rg_list_items 실패"
-        raise RuntimeError(f"[비산먼지] 그리드에서 '비산먼지' 행을 못 찾음. visible={visible}")
-
-    # ✅ 셀 하나씩 입력 (커밋 이벤트 확실)
-    rg_set_cell_by_keys(driver, tr, c_sd, date_str)
-    rg_set_cell_by_keys(driver, tr, c_st, st)
-    rg_set_cell_by_keys(driver, tr, c_ed, date_str)
-    rg_set_cell_by_keys(driver, tr, c_et, et)
-
-    #rg_set_cell_by_keys(driver, tr, c_vol, vol)
-    #rg_set_cell_by_keys(driver, tr, c_vol_u, vol_u)
-
-    print("▶ 비산먼지 RealGrid 입력 완료")
-
-
-# eco_input.py 내의 기존 _norm_rg를 더 강력하게 수정
-def _norm_rg(s: str) -> str:
-    if s is None: return ""
-    # 별표(*) 제거 및 모든 종류의 공백(nbsp 포함) 정리
-    s = str(s).replace("*", "").replace("\xa0", " ").replace("\n", " ").strip()
-    return " ".join(s.split())
-
-
-def tab4_find_tr_by_item(driver, item_name: str, max_steps=600):
-    """
-    탭4 RealGrid 탐색(ArrowDown/ArrowUp 다중 이동):
-    - 현재 화면의 보이는 행에서 먼저 탐색
-    - 없으면 ArrowDown을 10칸씩 이동하며 탐색
-    - 아래 끝 도달 시 ArrowUp으로 10칸씩 올라가며 재탐색
-    """
-    grid = driver.find_element(By.CSS_SELECTOR, TAB4_GRID_ROOT)
-    body = grid.find_element(By.CSS_SELECTOR, "div.rg-body")
-    target = _norm_rg(item_name)
-
-    # 전체 페이지 기준으로 그리드를 먼저 중앙에 맞춤
-    # (off-screen 상태에서 클릭 시 1칸 밀림 완화)
-    try:
-        driver.execute_script("arguments[0].scrollIntoView({block:'center', inline:'nearest'});", grid)
-        time.sleep(0.08)
-    except:
-        pass
-
-    def _scan_visible():
-        trs = body.find_elements(By.CSS_SELECTOR, "table > tbody > tr")
-        first_txt, last_txt = "", ""
-        for idx, tr in enumerate(trs):
-            try:
-                cell = tr.find_element(By.CSS_SELECTOR, "td:nth-child(3) > div")
-                txt = _norm_rg(cell.text)
-                if idx == 0:
-                    first_txt = txt
-                last_txt = txt
-                if txt == target:
-                    return tr, first_txt, last_txt
-            except:
-                continue
-        return None, first_txt, last_txt
-
-    def _send_arrows(key, count):
-        try:
-            for _ in range(count):
-                driver.switch_to.active_element.send_keys(key)
-                time.sleep(0.02)
-            return True
-        except:
-            try:
-                for _ in range(count):
-                    ActionChains(driver).send_keys(key).perform()
-                    time.sleep(0.02)
-                return True
-            except:
-                return False
-
-    # 키 입력 포커스 확보
-    try:
-        first_tr = body.find_element(By.CSS_SELECTOR, "table > tbody > tr:first-child")
-        first_cell = first_tr.find_element(By.CSS_SELECTOR, "td:nth-child(3) > div")
-        ActionChains(driver).move_to_element(first_cell).click(first_cell).perform()
-        time.sleep(0.05)
-    except:
-        try:
-            ActionChains(driver).move_to_element(body).click(body).perform()
-            time.sleep(0.05)
-        except:
-            pass
-
-    # 0) 현재 화면 먼저 확인
-    tr_now, _, _ = _scan_visible()
-    if tr_now:
-        return tr_now
-
-    # 화면 변화가 일정 횟수 이상 없으면 끝으로 판단
-    visible_rows = len(body.find_elements(By.CSS_SELECTOR, "table > tbody > tr"))
-    stable_limit = max(8, visible_rows // 2)
-
-    # 1) ArrowDown 15칸씩 탐색
-    _, prev_first, prev_last = _scan_visible()
-    down_stable = 0
-    for _ in range(max_steps):
-        if not _send_arrows(Keys.ARROW_DOWN, 15):
-            break
-        time.sleep(0.3)
-
-        tr_found, cur_first, cur_last = _scan_visible()
-        if tr_found:
-            time.sleep(0.08)
-            return tr_found
-
-        if cur_first == prev_first and cur_last == prev_last:
-            down_stable += 1
-            if down_stable >= stable_limit:
-                break
-        else:
-            down_stable = 0
-            prev_first, prev_last = cur_first, cur_last
-
-    # 2) ArrowUp 15칸씩 재탐색
-    _, prev_first, prev_last = _scan_visible()
-    up_stable = 0
-    for _ in range(max_steps):
-        if not _send_arrows(Keys.ARROW_UP, 15):
-            break
-        time.sleep(0.3)
-
-        tr_found, cur_first, cur_last = _scan_visible()
-        if tr_found:
-            time.sleep(0.08)
-            return tr_found
-
-        if cur_first == prev_first and cur_last == prev_last:
-            up_stable += 1
-            if up_stable >= stable_limit:
-                break
-        else:
-            up_stable = 0
-            prev_first, prev_last = cur_first, cur_last
-
-    return None
-
-def tab4_paste_row_using_tab2(driver, tr, values_A_to_M):
-    """
-    values_A_to_M: 엑셀 A~M (13개)
-    Tab4 전용 - rg_paste_to_tr_tab4 사용 (move_to_element 없음)
-    """
-    # 1차: 3열(측정항목)부터
-    try:
-        rg_paste_to_tr_tab4(driver, tr, start_col=3, values=values_A_to_M)
-        return True
-    except:
-        pass
-
-    # 2차: 4열부터(3열이 뭔가 막혔을 때 대비)
-    try:
-        rg_paste_to_tr_tab4(driver, tr, start_col=4, values=values_A_to_M)
-        return True
-    except:
-        return False
-
-
-def tab4_get_api_items(driver):
-    """
-    탭4 RealGrid API에서 전체 항목명 목록 추출.
-    - 가능하면 DataSource 전체 row를 읽고
-    - 실패 시 현재 화면 렌더 행만 fallback으로 수집
-    """
-    try:
-        data = driver.execute_script(
-            """
-            const root = document.querySelector(arguments[0]);
-            const gv = window.measGridViews && window.measGridViews.gridView1 ? window.measGridViews.gridView1 : null;
-            if (!gv) return {count: 0, items: []};
-
-            let items = [];
-            try {
-                const ds = (typeof gv.getDataSource === 'function') ? gv.getDataSource() : null;
-                if (ds && typeof ds.getRowCount === 'function') {
-                    const cnt = ds.getRowCount();
-                    for (let i = 0; i < cnt; i++) {
-                        let v = "";
-                        try {
-                            if (typeof ds.getValue === 'function') v = ds.getValue(i, 'anze_item');
-                        } catch (e) {}
-                        try {
-                            if ((v === null || v === undefined || v === "") && typeof gv.getValue === 'function') {
-                                v = gv.getValue(i, 'anze_item');
-                            }
-                        } catch (e) {}
-                        items.push(v == null ? "" : String(v));
-                    }
-                    return {count: cnt, items};
-                }
-            } catch (e) {}
-
-            // fallback: 현재 화면에 보이는 항목만
-            try {
-                if (!root) return {count: 0, items: []};
-                const cells = root.querySelectorAll('div.rg-body table > tbody > tr td:nth-child(3) > div');
-                const arr = Array.from(cells).map(el => (el.innerText || '').trim());
-                return {count: arr.length, items: arr};
-            } catch (e) {
-                return {count: 0, items: []};
-            }
-            """,
-            TAB4_GRID_ROOT,
-        )
-        if isinstance(data, dict):
-            return data
-    except:
-        pass
-    return {"count": 0, "items": []}
-
-
-
-def fill_tab4_grid_only(driver, table_rows):
-    """
-    table_rows: 엑셀에서 읽은 [A..M] 리스트들
-    - A: 항목
-    - B~M: 탭4에 붙여넣을 데이터(열 순서가 탭4와 동일하게 맞춰져 있음)
-    - 숨김행은 이미 read_tab4...에서 걸러진 상태라고 가정
-    """
-    # 엑셀 항목 정리
-    rows_to_input = []
-    for r in table_rows:
-        item = _norm_rg(r[0])
-        if not item:
-            continue
-
-        values = [("" if v is None else str(v).strip()) for v in r]  # ✅ A~M
-        if all(v == "" for v in values):
-            continue
-
-        rows_to_input.append((item, values))
-
-    # API 항목 수집
-    api_data = tab4_get_api_items(driver)
-    api_items_raw = api_data.get("items", []) if isinstance(api_data, dict) else []
-    api_count = int(api_data.get("count", len(api_items_raw))) if isinstance(api_data, dict) else len(api_items_raw)
-    excel_count = len(rows_to_input)
-
-    print(f"[탭4-카운트] API 항목 {api_count}개 / 엑셀 항목 {excel_count}개")
-
-    ok_count = 0
-    failed = []
-    fail_reason = []
-
-    for idx, (item, values) in enumerate(rows_to_input, start=1):
-        paste_ok = False
-        last_error = None
-
-        # 최대 3회 재시도
-        for attempt in range(3):
-            tr = tab4_find_tr_by_item(driver, item, max_steps=2000)
-            if not tr:
-                last_error = "행탐색실패"
-                continue
-
-            # 찾은 TR을 직접 클릭해서 선택
-            cell = None
-            try:
-                cell = tr.find_element(By.CSS_SELECTOR, "td:nth-child(3) > div")
-                ActionChains(driver).move_to_element(cell).click(cell).perform()
-                time.sleep(0.15)
-            except:
-                last_error = "클릭실패"
-                continue
-
-            # 붙여넣기 시도
-            ok = tab4_paste_row_using_tab2(driver, tr, values)
-            if not ok:
-                last_error = "붙여넣기실패"
-                continue
-
-            # 성공
-            ok_count += 1
-            print(f"   [입력 {idx}/{excel_count}] {item}")
-            paste_ok = True
-            break
-
-        # 3회 모두 실패한 경우
-        if not paste_ok:
-            failed.append(item)
-            if last_error:
-                fail_reason.append((item, last_error))
-                print(f"   [미적용 {idx}/{excel_count}] {item} ({last_error})")
-            else:
-                fail_reason.append((item, "미상"))
-                print(f"   [미적용 {idx}/{excel_count}] {item}")
-
-    print(f"[탭4-결과] 성공 {ok_count}개 / 실패 {len(failed)}개")
-    if failed:
-        rs = {}
-        for _, reason in fail_reason:
-            rs[reason] = rs.get(reason, 0) + 1
-        print("   ↳ 실패 원인: " + ", ".join([f"{k} {v}개" for k, v in rs.items()]))
-
+# _norm_rg, tab4_find_tr_by_item, tab4_paste_row_using_tab2,
+# tab4_get_api_items, fill_tab4_grid_only → tab4_utils.py 로 이동
 
 
 # =====================================================================
@@ -1084,14 +225,8 @@ def ask_yesno(msg, default_yes=True):
         print("⚠ 입력은 예/아니오(또는 y/n)로 해줘.")
 
 
-def wait(sec): time.sleep(sec)
-
-# clean: eco_input 전용 (앞표시 제거)
-def clean(s):
-    if not s: return ""
-    s = str(s).strip()
-    if s.startswith(("×","✕",",")): return s[1:].strip()
-    return s
+# wait → selenium_utils.wait() 로 이동
+# clean → data_utils.clean_leading_mark() 로 이동 (import 시 clean 으로 alias)
 
 # accept_any_alert: eco_input 전용 (단일 알림 수락 + 텍스트 반환)
 def accept_any_alert(driver, timeout=2):
@@ -1111,16 +246,22 @@ def accept_any_alert(driver, timeout=2):
 # 시료번호 목록 자동 생성
 # =====================================================================
 
-def extract_samples_from_nas(team_no, date_str):
+def extract_samples_from_nas(team_nos, date_str): # 파라미터 이름 변경
     """
     파일명에서 시작부분 AYYMMDDT-XX 추출.
-    team_no, 날짜(YYMMDD) 일치하는 파일만 목록에 추가.
+    team_nos(리스트 또는 문자열 튜플), 날짜(YYMMDD) 일치하는 파일만 목록에 추가.
     파일명에 '비산먼지' 포함 시 dust=True
     """
     sample_list=[]
-    pat=re.compile(r"^(A\d{6}\d-\d{2})")  # A2512313-01 패턴
+    pat=re.compile(r"^(A\d{6}\d-\d{2})")
 
-    date_key = date_str.replace("-", "")[2:]   # '2025-12-31' → '251231'
+    date_key = date_str.replace("-", "")[2:]
+
+    # team_nos가 단일 값(int/str)이면 리스트로 변환
+    if isinstance(team_nos, (int, str)):
+        team_nos = [str(team_nos)]
+    else:
+        team_nos = [str(t) for t in team_nos]
 
     for d in NAS_DIRS:
         folder=os.path.join(NAS_BASE,d)
@@ -1134,12 +275,12 @@ def extract_samples_from_nas(team_no, date_str):
 
                 sample_no=m.group(1)
 
-                # 날짜 필터 ↓↓↓
+                # 날짜 필터
                 if sample_no[1:7] != date_key:
                     continue
 
-                # 팀 필터 ↓↓↓
-                if sample_no[7] != str(team_no):
+                # 팀 필터 ↓↓↓ (여러 팀 중 하나라도 일치하면 통과, team_nos가 비어있으면 전체 통과)
+                if team_nos and (sample_no[7] not in team_nos):
                     continue
 
                 dust = ("비산먼지" in f)
@@ -1331,17 +472,17 @@ def fill_tab2(d, data, is_dust):
     set_wind(d, data["풍향"])
     sv("input.meas_wspd", data["풍속"])
 
-    sv("#meas_start_time", data["채취시작"])
-    sv("#meas_end_time", data["채취끝"])
+    sv(SEL_START_TIME, data["채취시작"])
+    sv(SEL_END_TIME, data["채취끝"])
 
     if not is_dust:
-        sv("#basis_o2c", data["표준산소농도"])
-        sv("#meas_o2c", data["실측산소농도"])
-        sv("#meas_gas_fvol", data["배출가스유량전"])
-        sv("#meas_gas_fvol_o2_aft", data["배출가스유량후"])
-        sv("#meas_humd_vol", data["수분량"])
-        sv("#gas_meter_temper", data["배출가스온도"])
-        sv("#meas_fspd", data["배출가스유속"])
+        sv(SEL_O2_STD, data["표준산소농도"])
+        sv(SEL_O2_MEAS, data["실측산소농도"])
+        sv(SEL_GAS_VOL_PRE, data["배출가스유량전"])
+        sv(SEL_GAS_VOL_POST, data["배출가스유량후"])
+        sv(SEL_MOISTURE, data["수분량"])
+        sv(SEL_GAS_TEMP, data["배출가스온도"])
+        sv(SEL_GAS_SPEED, data["배출가스유속"])
 
     print("✅ 탭2 입력 완료")
 
@@ -1480,27 +621,7 @@ def write_sampler_comment(driver, text="특이사항 없음"):
         print("⚠ 채취자 의견 입력 실패:", e)
 
 
-# ------------------------------------------------------------
-# 🔽 탭4 입력
-# ------------------------------------------------------------
-def fill_tab4_dates(driver, sample_no: str, tab4_meta: dict):
-    sample_date = sample_to_datestr(sample_no)  # 기존 함수 (YYYY-MM-DD)
-
-    rcpt_dt = tab4_meta.get("rcpt_dt", "").strip()
-    start_src = tab4_meta.get("start_src", "").strip()
-    end_dt = tab4_meta.get("end_dt", "").strip()
-
-    # 1) 시료접수일시
-    if rcpt_dt:
-        set_date_js(driver, "#smpl_rcpt_dt", rcpt_dt)
-
-    # 2) 분석기간 시작
-    if start_src:
-        set_date_js(driver, "#anze_start_dt", start_src)
-    
-    # 3) 분석기간 끝
-    if end_dt:
-        set_date_js(driver, "#anze_end_dt", end_dt)
+# fill_tab4_dates → tab4_utils.py 로 이동
 
 
 # ------------------------------------------------------------
@@ -2011,69 +1132,12 @@ def upload_tab4_pdfs(driver, pdf_analy_path: str, pdf_record_path: str,
     # 2) setFile 처리 시간(서버 업로드/검증이 있을 수 있어 최소 대기)
     time.sleep(1.0)
 
-
-def tab4_temp_save(driver):
-    # 임시저장
-    safe_click(driver, "#btnTempSave")
-    _accept_all_alerts(driver, total_wait=6.0, poll=0.2, label="탭4임시저장")
-    
-def tab4_comp_save(driver):
-    # 입력완료
-    safe_click(driver, "#btnCompSave")
-    _accept_all_alerts(driver, total_wait=6.0, poll=0.2, label="탭4저장완료")    
+# tab4_temp_save, tab4_comp_save → tab4_utils.py 로 이동
 
 
-#==============================탭2 리얼그리드 입력==============================
-
-def read_dust_realgird_values(excel_path: str):
-    """
-    비산먼지일 때:
-    - 시료채취량 = 평균(B19,B20) * B2 * 1000
-    - 흡인속도 = 평균(B19,B20) * 1000
-    - 시작시간 = I38, 종료시간 = J38
-    - 단위: L, L/min
-    """
-    wb = load_workbook(excel_path, data_only=True)
-    ws = _find_sheet_by_candidates(wb, ["입력", "입력(분석값)"])
-    if ws is None:
-        raise RuntimeError("엑셀에서 '입력' 시트를 찾지 못함")
-
-    def f(v):
-        if v is None or v == "":
-            return None
-        try:
-            return float(v)
-        except:
-            return None
-
-    b19 = f(ws["B19"].value)
-    b20 = f(ws["B20"].value)
-    b2  = f(ws["B2"].value)
-
-    if b19 is None or b20 is None or b2 is None:
-        raise RuntimeError("비산먼지 계산용 셀(B19,B20,B2) 값이 비어있음")
-
-    avg = (b19 + b20) / 2.0
-
-    samp_vol = avg * b2 * 1000.0     # L
-    suction  = avg * 1000.0          # L/min
-
-    st = ws["I38"].value
-    ed = ws["J38"].value
-
-    st = trim_hm(st)  # 너가 이미 가진 함수
-    ed = trim_hm(ed)
-
-    return {
-        "시료채취량": f"{samp_vol:.0f}",   # 보통 정수로 들어가길래 0자리
-        "채취량단위": "L",
-        "흡인속도": f"{suction:.0f}",
-        "흡인속도단위": "L/min",
-        "시작시간": st,
-        "종료시간": ed,
-    }
-
-
+#============================================================
+#                       탭2 리얼그리드 입력
+#============================================================
 def read_realgird_headers(driver, grid_root_css: str):
     """
     RealGrid 컨테이너(grid_root_css)에서 헤더 텍스트를 읽어
@@ -2252,48 +1316,24 @@ def read_realgird_values(excel_path):
         spd = ws.cell(row=r, column=c_spd).value
         vol = ws.cell(row=r, column=c_vol).value
 
+        vol_unit = "Sm³" if item in sm3_items else "L"
+
+        # 시료채취량: 사이트가 소수점 4자리까지만 지원 → 반올림
+        vol_str = "" if vol is None else str(vol).strip()
+        if vol_str:
+            try:
+                vol_str = f"{float(vol_str.replace(',', '')):.4f}"
+            except ValueError:
+                pass
+
         per_item[item] = {
             "시작시간": "" if st is None else str(st).strip(),
             "종료시간": "" if et is None else str(et).strip(),
             "흡인속도": "" if spd is None else str(spd).strip(),
-            "시료채취량": "" if vol is None else str(vol).strip(),
-            "채취량단위": "L",
+            "시료채취량": vol_str,
+            "채취량단위": vol_unit,
             "흡인속도단위": "L/min",
         }
-
-    # 2) 비산먼지 계산값이 존재하면 "비산먼지" 항목에 값만 덮어쓰기
-    #    (구분 로직이 아니라, 값 소스만 자동 적용)
-    def to_float(x):
-        try:
-            return float(x)
-        except:
-            return None
-
-    b2  = to_float(ws["B2"].value)   # 필요하다 했던 값
-    b19 = to_float(ws["B19"].value)
-    b20 = to_float(ws["B20"].value)
-    i38 = ws["I38"].value
-    j38 = ws["J38"].value
-
-    if (b2 is not None) and (b19 is not None) and (b20 is not None):
-        avg = (b19 + b20) / 2.0
-        vol_calc = avg * b2 * 1000.0
-        spd_calc = avg * 1000.0
-        st_calc = "" if i38 is None else str(i38).strip()
-        et_calc = "" if j38 is None else str(j38).strip()
-
-        # 덮어쓸 후보 항목명들(사이트/엑셀 표현 차이 대비)
-        dust_names = ["비산먼지"]
-        for dn in dust_names:
-            if dn in per_item:
-                per_item[dn].update({
-                    "시작시간": st_calc,
-                    "종료시간": et_calc,
-                    "시료채취량": f"{vol_calc:.0f}",
-                    "흡인속도": f"{spd_calc:.0f}",
-                    "채취량단위": "L",
-                    "흡인속도단위": "L/min",
-                })
 
     return per_item
 
@@ -2353,13 +1393,6 @@ def fill_tab2_realgird(driver, excel_path, sample_no, grid_root_css):
         rg_paste_to_tr(driver, tr, start_col, values)
 
     print("▶ RealGrid 붙여넣기 입력 완료")
-
-
-#===============================팝업닫기========================
-
-POPUP_CLOSE_SEL = "body > div > div > div.modal-body > div.modal-footer.row > form > input"
-
-
 
 
 # =====================================================================
@@ -2507,12 +1540,21 @@ def _main_air():
         print(f"총 {total}개 시료(날짜 {len(date_groups)}개 그룹) 처리 예정")
 
     else:
-        team_no  = input("팀 번호(1~5): ").strip()
+        team_input = input("팀 번호(쉼표 구분, 예: 1,3 / 미입력 시 전체): ").strip()
         date_str = input("날짜(YYYY-MM-DD): ").strip()
-        if not team_no.isdigit():
-            print("팀 번호 오류"); return
-        samples = extract_samples_from_nas(int(team_no), date_str)
-        print(f"총 {len(samples)}개 시료 자동 입력 예정")
+        
+        # 콤마로 구분된 팀 번호를 리스트로 파싱
+        team_nos = [t.strip() for t in team_input.split(",")] if team_input else []
+        
+        # 숫자 검증 (선택사항, 빈 리스트면 전체 조회)
+        for t in team_nos:
+            if not t.isdigit():
+                print(f"팀 번호 오류: '{t}'는 숫자가 아닙니다."); return
+
+        samples = extract_samples_from_nas(team_nos, date_str)
+        
+        팀_표시 = ",".join(team_nos) if team_nos else "전체"
+        print(f"▶ 팀({팀_표시}) 총 {len(samples)}개 시료 자동 입력 예정")
         date_groups = {date_str: samples}
 
     # 드라이버 / 로그인
@@ -2572,7 +1614,7 @@ def _main_air():
             if do_tab2:
                 safe_click(driver, "#ui-id-2")
                 fill_tab2(driver, excel, is_dust)
-                set_date_js(driver, "#meas_end_dt", date_str)
+                set_date_js(driver, SEL_DATE, date_str)
 
                 if not is_dust:
                     fill_facility_rows(driver, parse_facility_from_excel(path))
@@ -2582,10 +1624,7 @@ def _main_air():
                 write_sampler_comment(driver)
 
                 GRID_ROOT = "#measGridAnalySampAnzeDataAirItemList1"
-                if is_dust:
-                    fill_tab2_realgird_dust_only(driver, path, sample, GRID_ROOT)
-                else:
-                    rg2_fill_measure_grid_api(driver, sample, read_realgird_values(path))
+                rg2_fill_measure_grid_api(driver, sample, read_realgird_values(path))
 
                 # PDF 업로드
                 did_pdf  = False

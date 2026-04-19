@@ -9,7 +9,6 @@ COM 기반 성적서 자동 복사 – (조건부서식 + 대기시료채취 및
 - sample-2: 범위 복사 + 대기시료채취 및 분석일지 숨김 그대로 복사
 - -3: D/H(30% 파랑, 초과 빨강), J14 vs D18:D21, D37/H37 역전, 시료번호 불일치
 - -3: 비산먼지면 O1, 그 외 P1
-- AutoFit 제거
 - 클립보드/대용량 팝업 방지
 - 숨김 행은 검토에서 PASS
 - 전체측정시간(E5~F5) "엄격" 범위(경계 포함 오류), 초 제거, HH:MM만 출력
@@ -313,7 +312,12 @@ def copy_sheet_as_picture(main_ws, dst_ws, anchor_addr="A3", retries=5):
 def add_fail_sheet(wb_out, fail_list):
     if not fail_list:
         return
-    ws_fail = wb_out.Worksheets.Add(After=wb_out.Worksheets(wb_out.Worksheets.Count))
+    try:
+        dummy = wb_out.Worksheets("Dummy_End")
+        ws_fail = wb_out.Worksheets.Add(dummy)
+    except:
+        ws_fail = wb_out.Worksheets.Add()
+
     ws_fail.Name = "복사 실패"
     ws_fail.Range("A1").Value = "복사 실패한 시료번호"
     row = 2
@@ -321,10 +325,6 @@ def add_fail_sheet(wb_out, fail_list):
         ws_fail.Range(f"A{row}").Value = sample
         row += 1
 
-
-# ============================================================
-# 숫자/시간 유틸
-# ============================================================
 # ============================================================
 # 분류(부분포함 방식으로 안정화)
 # ============================================================
@@ -568,59 +568,6 @@ def read_analysis_items(ws_analysis):
         })
     return rows
 
-
-# ============================================================
-# 비산먼지(입력 38행~) 읽기 (숨김 PASS)
-# ============================================================
-def read_fugitive_dust_items(ws_input):
-    if ws_input is None:
-        return []
-
-    rows = []
-    empty_streak = 0
-    for r in range(38, 300):
-        try:
-            if ws_input.Rows(r).Hidden or ws_input.Rows(r).RowHeight == 0:
-                continue
-        except:
-            pass
-
-        flag = ws_input.Cells(r, 1).Value  # A
-        item = ws_input.Cells(r, 2).Value  # B
-
-        if (item is None or str(item).strip() == "") and (flag is None or str(flag).strip() == ""):
-            empty_streak += 1
-            if empty_streak >= 5:
-                break
-            continue
-        empty_streak = 0
-
-        if flag is None or str(flag).strip() == "":
-            continue
-
-        item_s = str(item).strip() if item is not None else ""
-        if not item_s:
-            continue
-
-        conc = ws_input.Cells(r, 5).Value     # E
-        limitv = ws_input.Cells(r, 7).Value   # G
-        st_raw = ws_input.Cells(r, 10).Value  # J
-        ed_raw = ws_input.Cells(r, 11).Value  # K
-
-        rows.append({
-            "src": "입력(비산먼지)",
-            "row": r,
-            "item": item_s,
-            "cat": "비산먼지",
-            "conc": to_float_if_pure_number(conc),
-            "limit": to_float_if_pure_number(limitv),
-            "start_dt": to_datetime_if_possible(st_raw),
-            "end_dt": to_datetime_if_possible(ed_raw),
-            "group_id": None,
-        })
-    return rows
-
-
 # ============================================================
 # 농도 vs 기준 체크(중복 제거)
 # ============================================================
@@ -697,7 +644,6 @@ def get_devices_from_input_sheet(wb_src):
         "gas_meter": "대기배출가스측정기",
         "thc_meter": "대기배출가스(THC)측정기",
         "fugitive_dust": "비산먼지",
-        # ✅ 추가
         "moisture_auto": "수분량자동측정기",
     }
 
@@ -899,23 +845,48 @@ def main(sample_list, user_name):
     excel = get_excel_app()
 
     try:
+        excel.ScreenUpdating = False
+        excel.DisplayAlerts = False
+        excel.EnableEvents = False        # 매크로/이벤트 실행 차단
+        excel.Interactive = False         # 사용자 상호작용 차단 (성능 향상)
+        excel.Cursor = 2
+    except:
+        pass
+
+    try:
         wb_out = excel.Workbooks.Add()
         while wb_out.Worksheets.Count > 1:
             wb_out.Worksheets(1).Delete()
 
-        first_sheet_used = False
+        dummy_ws = wb_out.Worksheets(1)
+        dummy_ws.Name = "Dummy_End"
 
-        for sample in sample_list:
+        for item in sample_list:
+            # GUI에서 넘어온 경우(튜플)와 단독 실행(문자열) 모두 호환되도록 처리
+            if isinstance(item, tuple):
+                sample, src_path = item
+            else:
+                sample = item
+                # 튜플이 아니면 어쩔 수 없이 NAS를 검색 (기존 로직)
+                src_path = find_excel(sample, SRC_DIR)
+
             log("\n-------------------------------")
             log(f" 처리: {sample}")
-
-            src_path = find_excel(sample, SRC_DIR)
-            if not src_path:
+            
+            if src_path:
+                log(f" → 발견: {src_path}")
+            else:
+                log(f"⚠ 파일 없음: {sample}")
                 fail_list.append(sample)
                 continue
 
             try:
-                wb_src = excel.Workbooks.Open(src_path, ReadOnly=True)
+                wb_src = excel.Workbooks.Open(
+                    src_path, 
+                    UpdateLinks=0, 
+                    ReadOnly=True, 
+                    IgnoreReadOnlyRecommended=True
+                )
             except:
                 log(f"❌ 파일 열기 실패: {src_path}")
                 fail_list.append(sample)
@@ -954,10 +925,10 @@ def main(sample_list, user_name):
                     main_ws = wb_src.Worksheets(1)
 
                 # 계산/캐시(유지)
-                try:
-                    excel.CalculateFullRebuild()
-                except:
-                    pass
+                #try:
+                #    excel.Calculate()
+                #except:
+                #    pass
 
                 # ============================================================
                 # (A) 체크된 항목에서 총탄화수소 유무 + C65(FID/PF) 판정 준비
@@ -981,36 +952,35 @@ def main(sample_list, user_name):
                 # (1) sample-1
                 # ============================================================
                 try:
-                    try:
-                        main_ws.Unprotect("ydenv")
-                    except:
-                        pass
+                    # 1. 보호 해제 (그림 복사를 위해 필요)
+                    try: main_ws.Unprotect("ydenv")
+                    except: pass
 
-                    if not first_sheet_used:
-                        ws1 = wb_out.Worksheets(1)
-                        ws1.Name = f"{sample}-1"
-                        first_sheet_used = True
-                    else:
-                        ws1 = wb_out.Worksheets.Add(After=wb_out.Worksheets(wb_out.Worksheets.Count))
-                        ws1.Name = f"{sample}-1"
+                    ws1 = wb_out.Worksheets.Add(dummy_ws)
+                    ws1.Name = f"{sample}-1"
 
                     log("  [1] sample-1: 대기측정기록부 시작")
+                    
+                    # 2. 그림 복사 (화면 갱신 잠깐 허용)
+                    try: excel.ScreenUpdating = True
+                    except: pass
+                    
                     copy_sheet_as_picture(main_ws, ws1, "A3")
+                    
+                    try: excel.ScreenUpdating = False
+                    except: pass
 
+                    # 3. 입력 시트 데이터 복사
                     if input2_ws and input2_ws.Name == "입력":
-                        try:
-                            input2_ws.Unprotect("ydenv")
-                        except:
-                            pass
+                        try: input2_ws.Unprotect("ydenv")
+                        except: pass
+                        
                         b18_value = str(input2_ws.Range("B18").Value or "").strip()
                         if b18_value == "사용":
                             safe_copy_no_link(input2_ws.Range("A23:B23"), ws1.Range("A1"))
-
+                            ws1.Columns("A:B").AutoFit()
+                    
                     log(f" ▶ sample-1 완료")
-                    try:
-                        main_ws.Protect("ydenv")
-                    except:
-                        pass
 
                 except Exception as e:
                     log(f"❌ sample-1 복사 실패: {e}")
@@ -1021,7 +991,7 @@ def main(sample_list, user_name):
                 # (2) sample-2
                 # ============================================================
                 try:
-                    ws2 = wb_out.Worksheets.Add(After=wb_out.Worksheets(wb_out.Worksheets.Count))
+                    ws2 = wb_out.Worksheets.Add(dummy_ws)
                     ws2.Name = f"{sample}-2"
 
                     bottom_row = 0
@@ -1035,6 +1005,7 @@ def main(sample_list, user_name):
                         if extract_ws:
                             copy_range_with_hidden(extract_ws, "A2:AC47", ws2, "A1")
                             bottom_row = update_bottom(bottom_row, 1, row_count_of_addr(extract_ws, "A2:AC47"))
+                        ws2.Columns("A:AF").AutoFit()
                         log(f" ▶ sample-2 완료(비산먼지)")
                     else:
                         if input_ws:
@@ -1049,11 +1020,11 @@ def main(sample_list, user_name):
                             else:
                                 safe_copy_no_link(input_ws.Range("A139:K144"), ws2.Range("A1"))
                                 bottom_row = update_bottom(bottom_row, 1, row_count_of_addr(input_ws, "A139:K144"))
-
+                                
                             if extract_ws:
                                 copy_range_with_hidden(extract_ws, "B5:AG51", ws2, "A8")
                                 bottom_row = update_bottom(bottom_row, 8, row_count_of_addr(extract_ws, "B5:AG51"))
-
+                            ws2.Columns("A:AF").AutoFit()
                             log(f" ▶ sample-2 완료")
                             try:
                                 input_ws.Protect("ydenv")
@@ -1072,7 +1043,7 @@ def main(sample_list, user_name):
                     if not has_thc_item:
                         log("  총탄화수소 없음 → sample-4 생성/복사 스킵")
                     else:
-                        ws4 = wb_out.Worksheets.Add(After=wb_out.Worksheets(wb_out.Worksheets.Count))
+                        ws4 = wb_out.Worksheets.Add(dummy_ws)
                         ws4.Name = f"{sample}-4"
 
                         pf_vis = is_sheet_visible(thc_pf_ws) if thc_pf_ws else False
@@ -1095,6 +1066,7 @@ def main(sample_list, user_name):
                             # ✅ 고정 범위 복사: A1:G150 -> A1
                             r_cnt, c_cnt = copy_fixed_block(chosen, "A1:G150", ws4, "A1")
                             thc_copied = str(chosen.Name)
+                            ws4.Columns("A:G").AutoFit()
                             log(f" sample-4 : {thc_copied}")
 
                         log(f" ▶ sample-4 완료(THC)")
@@ -1165,7 +1137,7 @@ def main(sample_list, user_name):
 
                     # (E) 입력(분석값) + 비산먼지(비산먼지일 때만)
                     analysis_rows = list(analysis_rows_cached)
-                    fugitive_rows = read_fugitive_dust_items(input2_ws) if is_fugitive else []
+                    fugitive_rows = []
 
                     # 장비
                     gas_cnt, particle_cnt, has_gas_meter, has_thc_meter, has_fugitive_dust, has_particle_sampler, has_moisture_auto, b18_value = get_devices_from_input_sheet(wb_src)
@@ -1253,9 +1225,9 @@ def main(sample_list, user_name):
                     )
 
                     if has_any_issue:
-                        ws3 = wb_out.Worksheets.Add(After=wb_out.Worksheets(wb_out.Worksheets.Count))
+                        ws3 = wb_out.Worksheets.Add(dummy_ws)
                         ws3.Name = f"{sample}-3"
-
+                        
                         ws3.Range("A1").Value = "배출가스유량 비교"
                         ws3.Range("A2").Value = "항목"
                         ws3.Range("B2").Value = "값(m3/min)"
@@ -1346,33 +1318,49 @@ def main(sample_list, user_name):
                         rr += 2
                         ws3.Range(f"A{rr}").Value = "채취시간/장비 검토"
                         rr += 1
-                        ws3.Range(f"A{rr}").Value = (
-                            f"[장비요약] 가스상(굴뚝)={gas_cnt}대, 입자상(굴뚝표기)={particle_cnt}대, "
-                            f"입자상장비={('있음' if has_particle_sampler else '없음')}, "
-                            f"배출가스측정기={('있음' if has_gas_meter else '없음')}, THC측정기={('있음' if has_thc_meter else '없음')}, "
-                            f"비산먼지장비={('있음' if has_fugitive_dust else '없음')}, "
-                            f"수분량자동측정기={('있음' if has_moisture_auto else '없음')}, 수분자동측정기={b18_value}"
-                        )
+                        equipment_info = [
+                            "[장비요약]",
+                            f"가스상(굴뚝)={gas_cnt}대",
+                            f"입자상(굴뚝표기)={particle_cnt}대",
+                            f"입자상장비={('있음' if has_particle_sampler else '없음')}",
+                            f"배출가스측정기={('있음' if has_gas_meter else '없음')}",
+                            f"THC측정기={('있음' if has_thc_meter else '없음')}",
+                            f"비산먼지장비={('있음' if has_fugitive_dust else '없음')}",
+                            f"수분량자동={('있음' if has_moisture_auto else '없음')}",
+                            f"수분자동입력={b18_value}"
+                        ]
+                        for c_idx, val in enumerate(equipment_info, start=1):
+                            ws3.Cells(rr, c_idx).Value = val
 
                         rr += 1
 
+                        # (4) 에러 메시지 출력 방식 변경 (A열: 태그, B열: 메인 내용, C열~: 줄바꿈 상세항목)
                         for msg in device_issues:
-                            cell = ws3.Range(f"A{rr}")
-                            cell.Value = msg
-                            cell.WrapText = True
-                            cell.VerticalAlignment = -4160
-                            cell.Interior.ColorIndex = 3
-                            set_row_height_cap(ws3, rr, cap=80)
+                            parts = msg.split("] ", 1)
+                            tag = parts[0] + "]" if len(parts) > 1 else "[장비누락]"
+                            desc = parts[1] if len(parts) > 1 else msg
+                            
+                            ws3.Cells(rr, 1).Value = tag
+                            ws3.Cells(rr, 2).Value = desc
+                            ws3.Range(ws3.Cells(rr, 1), ws3.Cells(rr, 2)).Interior.ColorIndex = 3
                             rr += 1
 
                         for msg in time_issues:
-                            cell = ws3.Range(f"A{rr}")
-                            cell.Value = msg
-                            cell.WrapText = True
-                            cell.VerticalAlignment = -4160
-                            if ("장비초과" in msg) or ("채취시간불일치" in msg) or ("전체시간범위이탈" in msg) or ("시간역전" in msg) or ("[오류]" in msg):
-                                cell.Interior.ColorIndex = 3
-                            set_row_height_cap(ws3, rr, cap=80)
+                            parts = msg.split("] ", 1)
+                            tag = parts[0] + "]" if len(parts) > 1 else "[시간오류]"
+                            rest = parts[1] if len(parts) > 1 else msg
+                            
+                            is_err = ("장비초과" in msg) or ("채취시간불일치" in msg) or ("전체시간범위이탈" in msg) or ("시간역전" in msg) or ("[오류]" in msg)
+                            color = 3 if is_err else -4142 # 3=빨강, -4142=투명
+                            
+                            ws3.Cells(rr, 1).Value = tag
+                            ws3.Cells(rr, 1).Interior.ColorIndex = color
+                            
+                            # \n 이 있는 경우 (예: 장비초과 시 동시채취 목록) C열, D열 등으로 분산
+                            desc_parts = rest.split("\n")
+                            for i, text_part in enumerate(desc_parts):
+                                ws3.Cells(rr, 2 + i).Value = text_part.strip("- ") # 앞에 붙은 '-' 기호 제거
+                                ws3.Cells(rr, 2 + i).Interior.ColorIndex = color
                             rr += 1
 
                         # THC 검증 출력
@@ -1380,16 +1368,27 @@ def main(sample_list, user_name):
                             rr += 1
                             ws3.Range(f"A{rr}").Value = "THC 시트(PF/FID) 복사 검증"
                             rr += 1
-                            ws3.Range(f"A{rr}").Value = f"THC장비={c65_val} / 기대={'THC 측정값(FID)' if is_fid_expect else 'THC 측정값(PF)'} / 복사됨={thc_copied or '(미복사)'}"
+                            thc_info = [
+                                f"THC장비={c65_val}",
+                                f"기대={'THC 측정값(FID)' if is_fid_expect else 'THC 측정값(PF)'}",
+                                f"복사됨={thc_copied or '(미복사)'}"
+                            ]
+                            for c_idx, val in enumerate(thc_info, start=1):
+                                ws3.Cells(rr, c_idx).Value = val
                             rr += 1
+                            
                             for msg in thc_issues:
-                                cell = ws3.Range(f"A{rr}")
-                                cell.Value = msg
-                                cell.WrapText = True
-                                cell.VerticalAlignment = -4160
-                                cell.Interior.ColorIndex = 3
-                                set_row_height_cap(ws3, rr, cap=80)
+                                parts = msg.split("] ", 1)
+                                tag = parts[0] + "]" if len(parts) > 1 else "[THC오류]"
+                                desc = parts[1] if len(parts) > 1 else msg
+                                
+                                ws3.Cells(rr, 1).Value = tag
+                                ws3.Cells(rr, 2).Value = desc
+                                ws3.Range(ws3.Cells(rr, 1), ws3.Cells(rr, 2)).Interior.ColorIndex = 3
                                 rr += 1
+
+                        # ✅ [추가] sample-3 시트 데이터 작성이 모두 끝난 후 열 너비 자동 맞춤
+                        ws3.Columns("A:I").AutoFit()
 
                         log(" ▶ sample-3 요약 시트 생성(이상 있음)")
                     else:
@@ -1399,13 +1398,46 @@ def main(sample_list, user_name):
                     log(f"⚠ sample-3 처리 중 오류(무시): {e}")
 
             finally:
+                # 1. 엑셀 설정 원상복구 (개별 파일 처리 직후)
+                try:
+                    if excel:
+                        excel.ScreenUpdating = True
+                        excel.DisplayAlerts = True
+                        excel.EnableEvents = True
+                        excel.Interactive = True
+                        # ✅ 반드시 자동 계산으로 다시 돌려놔야 함!
+                        excel.Calculation = -4105  # xlCalculationAutomatic
+                except:
+                    pass
+                
+                # 2. 클립보드 비우기
                 try:
                     clear_clipboard(excel)
                 except:
                     pass
-                wb_src.Close(SaveChanges=False)
+                
+                # 3. 원본 파일 닫기 (변수가 존재할 때만 닫도록 안전 처리)
+                try:
+                    # 'wb_src'가 정의되어 있고, None이 아닐 때만 Close 실행
+                    if 'wb_src' in locals() and wb_src is not None:
+                        wb_src.Close(SaveChanges=False)
+                except:
+                    pass
 
+        # --- 모든 샘플 작업 종료 후 ---
         add_fail_sheet(wb_out, fail_list)
+        
+        try:
+            excel.DisplayAlerts = False
+            wb_out.Worksheets("Dummy_End").Delete()
+            excel.DisplayAlerts = True
+        except:
+            pass
+
+        try:
+            wb_out.Worksheets(1).Activate()
+        except:
+            pass
 
         save_path = uniquify_path(out_path)
         wb_out.SaveAs(save_path, FileFormat=51)  # xlsx
@@ -1414,7 +1446,19 @@ def main(sample_list, user_name):
         log("\n=== 완료 ===")
         log(f"생성 파일: {save_path}")
 
+    except Exception as e:
+        log(f"\n❌ 실행 중 오류 발생: {e}")
+
     finally:
+        # 4. 최종 앱 설정 복구 (혹시 모르니 한 번 더 실행)
+        try:
+            if excel:
+                excel.ScreenUpdating = True
+                excel.DisplayAlerts = True
+                excel.Calculation = -4105
+        except:
+            pass
+        
         try:
             clear_clipboard(excel)
         except:

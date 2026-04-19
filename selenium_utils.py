@@ -13,6 +13,11 @@ from selenium.common.exceptions import TimeoutException, NoAlertPresentException
 import time
 
 
+def wait(sec):
+    """공통 대기 — eco_input, eco_check 등에서 time.sleep 대신 사용"""
+    time.sleep(sec)
+
+
 def init_driver():
     """Selenium 드라이버 초기화"""
     opt = webdriver.ChromeOptions()

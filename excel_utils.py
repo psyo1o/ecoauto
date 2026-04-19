@@ -3,6 +3,8 @@
 엑셀 읽기 통합 (eco_input, eco_check, report_check 공통 파서)
 """
 import os
+import warnings
+warnings.filterwarnings("ignore")  # 무조건 모든 경고 차단 (조건 없음)
 from datetime import datetime
 from openpyxl import load_workbook
 from openpyxl.utils import range_boundaries

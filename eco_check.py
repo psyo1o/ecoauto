@@ -2,18 +2,13 @@
 """
 측정인.kr 자동 비교 시스템 - FINAL + 파일명 자동 생성 + PDF 다운로드/하이퍼링크 + NG 빨간색 표시
 """
-
+import warnings
+warnings.filterwarnings("ignore")  # 무조건 모든 경고 차단 (조건 없음)
+warnings.showwarning = lambda *args, **kwargs: None
 import os
 import re
 import time
 from datetime import datetime
-import warnings
-warnings.simplefilter("ignore")
-warnings.filterwarnings(
-    "ignore",
-    category=UserWarning,
-    message="Conditional Formatting extension is not supported and will be removed"
-)
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -30,9 +25,9 @@ from openpyxl.formatting.rule import FormulaRule
 # ============================================================
 # 공통 유틸 모듈 (모듈화)
 # ============================================================
-from selenium_utils import safe_click, wait_el as wait_until_exists, close_popup, set_date_js
+from selenium_utils import safe_click, wait_el as wait_until_exists, close_popup, set_date_js, wait
 from format_utils import format_time as trim_time_to_hm, to_float1, to_float2
-from data_utils import norm_ymd, sample_to_datestr
+from data_utils import norm_ymd, sample_to_datestr, clean_leading_mark
 from excel_utils import find_sheet_by_candidates as _find_sheet_by_candidates_openpyxl
 from file_utils import find_excel_for_sample as _find_excel_util
 from measin_utils import (
@@ -43,6 +38,13 @@ from measin_utils import (
 from excel_utils import find_sheet_by_candidates, parse_measuring_record
 from realgrid_utils import rg_api_read_data
 from log_utils import log_error
+from measin_constants import (
+    SKIP_VOL_AND_SPEED, SKIP_SPEED_ONLY, DUST_SKIP_FIELDS,
+    SM3_ITEMS as sm3_items,
+    SEL_DATE, SEL_START_TIME, SEL_END_TIME,
+    SEL_O2_STD, SEL_O2_MEAS, SEL_GAS_VOL_PRE, SEL_GAS_VOL_POST,
+    SEL_MOISTURE, SEL_GAS_TEMP, SEL_GAS_SPEED
+)
 
 # ------------------------------------------------------------
 # 설정
@@ -58,32 +60,12 @@ COMPANY_MAP = {}   # ★ 추가: 시료번호 -> 업소명(표시용)
 
 
 # ============================================================
-# RealGrid 비교 예외(eco_input.py와 동일)
-# - 아래 항목들은 사이트/양식 특성상 일부 칸을 비워두는 것이 정상이라
-#   비교에서 해당 필드를 PASS(무시) 처리한다.
+# RealGrid 비교 예외 → measin_constants.py 에서 import 완료
 # ============================================================
-SKIP_VOL_AND_SPEED = {
-    "매연", "황산화물", "질소산화물", "일산화탄소", "총탄화수소", "비산먼지"
-}
-
-SKIP_SPEED_ONLY = {
-    "먼지", "비소화합물", "수은화합물", "구리화합물", "아연화합물", "카드뮴화합물",
-    "납화합물", "크로뮴화합물", "니켈화합물", "베릴륨화합물", "벤조(a)피렌"
-}
-
-# 비산먼지일 때 탭2에 값이 안 들어오는(정상) 항목들 → 비교 PASS
-DUST_SKIP_FIELDS = {
-    "표준산소농도", "실측산소농도",
-    "배출가스유량전", "배출가스유량후",
-    "수분량", "배출가스온도", "배출가스유속"
-}
-
 
 # ------------------------------------------------------------
-# 공통 유틸 (일부는 모듈에서 import, 여기선 eco_check 전용만)
+# 공통 유틸 (wait → selenium_utils, clean_leading_mark → data_utils)
 # ------------------------------------------------------------
-def wait(sec):
-    time.sleep(sec)
 
 
 def init_driver():
@@ -101,18 +83,6 @@ def init_driver():
     return d
 
 
-def clean_leading_mark(s):
-    if not s:
-        return ""
-    s = str(s).strip()
-    if s.startswith(("×", "✕", ",")):
-        return s[1:].strip()
-    return s
-
-
-# ------------------------------------------------------------
-# 로그인
-# ------------------------------------------------------------
 def _wait_new_pdf(download_dir, before_set, timeout=60):
     """
     클릭 직전(before_set) 대비 새로 생긴 PDF를 찾아서
@@ -420,7 +390,7 @@ def read_site_data(driver, sample_no):
     # ------------------------------------------------------------
     click_tab(driver, "ui-id-2")
     time.sleep(1)
-    data["날짜"] = norm_ymd(gv(driver, "#meas_end_dt"))
+    data["날짜"] = norm_ymd(gv(driver, SEL_DATE))
     data["기상"] = gv(driver,
         "#idWHArea > div > div:nth-child(2) > fieldset > label.col.col-12 > table > tbody > tr > td:nth-child(1) > input")
     data["기온"] = gv(driver,
@@ -434,16 +404,16 @@ def read_site_data(driver, sample_no):
     data["풍속"] = to_float1(gv(driver,
         "#idWHArea > div > div:nth-child(2) > fieldset > label.col.col-12 > table > tbody > tr > td:nth-child(6) > input"))
 
-    data["채취시작"] = trim_time_to_hm(gv(driver, "#meas_start_time"))
-    data["채취끝"] = trim_time_to_hm(gv(driver, "#meas_end_time"))
+    data["채취시작"] = trim_time_to_hm(gv(driver, SEL_START_TIME))
+    data["채취끝"] = trim_time_to_hm(gv(driver, SEL_END_TIME))
 
-    data["표준산소농도"] = to_float1(gv(driver, "#basis_o2c"))
-    data["실측산소농도"] = to_float1(gv(driver, "#meas_o2c"))
-    data["배출가스유량전"] = to_float1(gv(driver, "#meas_gas_fvol"))
-    data["배출가스유량후"] = to_float1(gv(driver, "#meas_gas_fvol_o2_aft"))
-    data["수분량"] = gv(driver, "#meas_humd_vol")
-    data["배출가스온도"] = gv(driver, "#gas_meter_temper")
-    data["배출가스유속"] = to_float2(gv(driver, "#meas_fspd"))
+    data["표준산소농도"] = to_float1(gv(driver, SEL_O2_STD))
+    data["실측산소농도"] = to_float1(gv(driver, SEL_O2_MEAS))
+    data["배출가스유량전"] = to_float1(gv(driver, SEL_GAS_VOL_PRE))
+    data["배출가스유량후"] = to_float1(gv(driver, SEL_GAS_VOL_POST))
+    data["수분량"] = gv(driver, SEL_MOISTURE)
+    data["배출가스온도"] = gv(driver, SEL_GAS_TEMP)
+    data["배출가스유속"] = to_float2(gv(driver, SEL_GAS_SPEED))
 
     # ------------------------------------------------------------
     # ③ 탭2에서 PDF 다운로드 실행
@@ -586,8 +556,8 @@ def _rg_norm_num(v):
     except:
         return s
 
-def _rg_norm_vol_1(v):
-    """시료채취량: 소수점 1자리로 통일"""
+def _rg_norm_vol_text(v):
+    """시료채취량: 소수점 4자리로 반올림 통일 (사이트·엑셀 비교용)"""
     if v is None:
         return ""
     s = str(v).strip()
@@ -595,9 +565,8 @@ def _rg_norm_vol_1(v):
         return ""
     s = s.replace(",", "")
     try:
-        f = float(s)
-        return f"{round(f, 1):.1f}"   # 항상 1자리 유지 (예: 10 -> "10.0")
-    except:
+        return f"{float(s):.4f}"
+    except ValueError:
         return s
 
 
@@ -620,50 +589,9 @@ def build_excel_realgird_expected(excel_path: str, sample_no: str, is_dust: bool
     """
     성적서 엑셀에서 탭2 RealGrid에 들어가야 하는 값(기대값) 생성.
     - 일반: 입력(분석값) 시트의 헤더(측정시작/측정 종료/시료흡인속도/시료채취량) 기반
-    - 비산먼지: B19,B20,B2 + I38,J38 계산/시간
     """
     wb = load_workbook(excel_path, data_only=True)
 
-    if is_dust:
-        ws = _find_sheet_by_candidates_openpyxl(wb, ["입력", "입력(분석값)", "입력(분석값) "])
-        if ws is None:
-            raise RuntimeError("비산먼지: 엑셀에서 '입력' 시트를 찾지 못함")
-
-        def f(v):
-            if v is None or v == "":
-                return None
-            try:
-                return float(str(v).replace(",", ""))
-            except:
-                return None
-
-        b19 = f(ws["B19"].value)
-        b20 = f(ws["B20"].value)
-        b2  = f(ws["B2"].value)
-
-        if b19 is None or b20 is None or b2 is None:
-            raise RuntimeError("비산먼지 계산용 셀(B19,B20,B2) 값이 비어있음")
-
-        avg = (b19 + b20) / 2.0
-        vol_calc = avg * b2 * 1000.0
-        spd_calc = avg * 1000.0
-        st = _rg_norm_time(ws["I38"].value)
-        et = _rg_norm_time(ws["J38"].value)
-
-        date_str = sample_to_datestr(sample_no) or ""
-
-        return {
-            "비산먼지": {
-                "sd": date_str, "st": st,
-                "ed": date_str, "et": et,
-                "vol": f"{vol_calc:.0f}",
-                "vol_u": "L",
-                "spd": f"{spd_calc:.0f}",
-                "spd_u": "L/min",
-            }
-        }
-
-    # ----- 일반(비산먼지 아님) -----
     ws = _find_sheet_by_candidates_openpyxl(wb, ["입력(분석값)", "입력"])
     if ws is None:
         raise RuntimeError("엑셀에서 '입력(분석값)' 시트를 찾지 못함")
@@ -711,12 +639,14 @@ def build_excel_realgird_expected(excel_path: str, sample_no: str, is_dust: bool
         st = _rg_norm_time(ws.cell(row=r, column=c_start).value)
         et = _rg_norm_time(ws.cell(row=r, column=c_end).value)
         spd = _rg_norm_num(ws.cell(row=r, column=c_spd).value)
-        vol = _rg_norm_num(ws.cell(row=r, column=c_vol).value)
+        vol = _rg_norm_vol_text(ws.cell(row=r, column=c_vol).value)
+
+        vol_unit = "Sm³" if item in sm3_items else "L"
 
         out[item] = {
             "sd": date_str, "st": st,
             "ed": date_str, "et": et,
-            "vol": vol, "vol_u": "L",
+            "vol": vol, "vol_u": vol_unit,
             "spd": spd, "spd_u": "L/min",
         }
 
@@ -739,7 +669,7 @@ def build_realgird_compare_rows(sample_no: str, site_rg: dict, excel_rg: dict) -
         ("st", "시작시간", _rg_norm_time),
         ("ed", "측정일(종료)", _rg_norm_date),
         ("et", "종료시간", _rg_norm_time),
-        ("vol", "시료채취량", _rg_norm_vol_1),
+        ("vol", "시료채취량", _rg_norm_vol_text),
         ("vol_u", "채취량단위", lambda x: "" if x is None else str(x).strip()),
         ("spd", "흡인속도", _rg_norm_num),
         ("spd_u", "흡인속도단위", lambda x: "" if x is None else str(x).strip()),
@@ -1024,7 +954,8 @@ def save_results(sample_rows_map, out_path):
     for sample_no, rows in sample_rows_map.items():
         ws = wb.create_sheet(sample_no)
         ws.append(["항목", "사이트값", "엑셀값", "비교", "사이트만존재", "엑셀만존재"])
-
+        # ✅ 개별 시료 시트 1행 1열 틀고정 (B2 셀 기준)
+        ws.freeze_panes = "B2"
         for r in rows:
             ws.append([r["항목"], r["사이트값"], r["엑셀값"], r["비교"],
                        r["사이트만존재"], r["엑셀만존재"]])

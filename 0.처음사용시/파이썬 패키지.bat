@@ -7,7 +7,7 @@ REM =========================================================
 REM 옵션 및 패키지 목록 설정
 REM =========================================================
 set "USE_USER=0"
-set "PACKAGES=selenium webdriver-manager openpyxl pandas pywin32 requests pywinauto pyperclip PyPDF2 pypdf tkinterdnd2"
+set "PACKAGES=selenium webdriver-manager openpyxl pandas pywin32 requests pywinauto pyperclip PyPDF2 pypdf tkinterdnd2 pillow"
 
 set "PIP_OPTS="
 if "%USE_USER%"=="1" set "PIP_OPTS=--user"
@@ -80,7 +80,10 @@ REM =========================================================
 REM 3. 최종 설치 확인
 REM =========================================================
 echo [3/3] 최종 설치 리스트 확인...
-%PY_CMD% -m pip list ^| findstr /i "%PACKAGES%"
+for %%P in (%PACKAGES%) do (
+    echo [PACKAGE] %%P
+    %PY_CMD% -m pip show %%P | findstr /i "Name Version"
+)
 echo.
 echo [DONE] 모든 작업이 완료되었습니다! [cite: 7]
 pause
