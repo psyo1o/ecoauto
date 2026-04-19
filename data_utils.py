@@ -221,3 +221,13 @@ def norm_ymd(v):
     if len(s) >= 10:
         s = s[:10]
     return s
+
+
+def clean_leading_mark(s):
+    """선행 ×, ✕, 쉼표 제거 — eco_input, eco_check 공통"""
+    if not s:
+        return ""
+    s = str(s).strip()
+    if s.startswith(("×", "✕", ",")):
+        return s[1:].strip()
+    return s

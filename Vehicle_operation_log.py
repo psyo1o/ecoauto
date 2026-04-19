@@ -1,8 +1,26 @@
+# -*- coding: utf-8 -*-
+"""
+차량 운행일지 검토 모듈
+- 발송대장 / 주행기록부 / 환경기술인력 파일 3개를 비교
+- 날짜별 출퇴근 시간, 주행거리, 근무시간 정합성 검사
+- 주 52시간 초과 여부 보고서 생성
+- GUI와 로직이 한 파일에 통합
+"""
 import re
 import datetime as dt
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    module="openpyxl"
+)
+
+DEFAULT_DAEJANG_DIR = r"\\192.168.10.163\측정팀\0.시료접수발송대장"
+DEFAULT_DRIVE_LOG_DIR = r"\\192.168.10.163\측정팀\10.검토\4.차랑운행일지 검토"
+DEFAULT_ENGINEER_DIR = r"\\192.168.10.163\측정팀\2.성적서"
 
 # ============================================================
 # 공통 유틸 모듈 (모듈화)
@@ -443,7 +461,8 @@ def write_report(rows, drive_list):
     wb = Workbook()
     ws = wb.active
     ws.title = "결과"
-
+    # ✅ 첫 번째 시트(결과) 1행 1열 틀고정
+    ws.freeze_panes = "B2"
     header = [
         "SN","업소명","대장시간",
         "운행일지_일치여부",
@@ -488,6 +507,10 @@ def write_report(rows, drive_list):
     # ✅ 주52시간 시트 (운행일지 기반 / 월~일 / 휴게 1시간 차감)
     # ---------------------------------------------------------
     ws52 = wb.create_sheet("주52시간")
+    
+    # ✅ 두 번째 시트(주52시간)도 틀고정
+    ws52.freeze_panes = "B2"
+    
     ws52.append(["인력", "주시작(월)", "주종료(일)", "주간합계(시간)", "준수여부"])
 
     weekly = build_weekly_52_report(drive_list, break_hours=1.0)
@@ -535,6 +558,7 @@ def gui_start():
     def choose_daejang():
         p = filedialog.askopenfilename(
             title="대장파일 찾기",
+            initialdir=DEFAULT_DAEJANG_DIR,
             filetypes=[("Excel Files","*.xlsx;*.xls;*.xlsm")]
         )
         if p: daejang_path.set(p)
@@ -542,6 +566,7 @@ def gui_start():
     def choose_drive():
         p = filedialog.askopenfilename(
             title="운행일지 파일 찾기",
+            initialdir=DEFAULT_DRIVE_LOG_DIR,
             filetypes=[("Excel Files","*.xlsx;*.xls;*.xlsm")]
         )
         if p: drive_path.set(p)
@@ -549,6 +574,7 @@ def gui_start():
     def choose_eng():
         p = filedialog.askopenfilename(
             title="기술인력 파일 찾기",
+            initialdir=DEFAULT_ENGINEER_DIR,
             filetypes=[("Excel Files","*.xlsx;*.xls;*.xlsm")]
         )
         if p: eng_path.set(p)

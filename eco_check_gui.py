@@ -4,7 +4,10 @@
 - gui_common 모듈 활용
 - 실제 진행률 표시
 """
-
+import warnings
+warnings.simplefilter("ignore")
+warnings.filterwarnings("ignore")
+warnings.showwarning = lambda *args, **kwargs: None
 import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox

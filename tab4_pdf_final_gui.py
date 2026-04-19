@@ -175,78 +175,64 @@ class ExcelPdfExporter:
         base_name = os.path.splitext(os.path.basename(excel_path))[0]
         final_pdf = os.path.join(out_dir, f"{base_name}.pdf")
 
-        # 임시 개별 PDF
-        cover_pdf  = os.path.join(tmp_dir, f"{base_name}__시험항목날짜서명.pdf")
-        analy_pdf  = os.path.join(tmp_dir, f"{base_name}__분석일지.pdf")
-        record_pdf = os.path.join(tmp_dir, f"{base_name}__측정기록부.pdf")
-
-        # 업로드용
-        upload1 = os.path.join(tmp_dir, f"{base_name}__업로드1(분석일지).pdf")
-        upload2 = os.path.join(tmp_dir, f"{base_name}__업로드2(측정기록부).pdf")
-
-        SHEET_COVER_CANDS = list(sheet_cover_cands)
-        SHEET_ANALY_CANDS = list(sheet_analy_cands)
-        SHEET_RECORD_CANDS = list(sheet_record_cands)
-
-        # workbook 열어서 실제 시트명 매칭
         wb = None
         try:
+            # 1. 엑셀 파일 열기 (한 번만 열어서 모든 작업 처리)
             wb = self.excel.Workbooks.Open(excel_path, ReadOnly=True, UpdateLinks=0)
 
-            sh_cover  = _find_sheet(wb, SHEET_COVER_CANDS)   # ✅ 선택(없어도 됨)
-            sh_analy  = _find_sheet(wb, SHEET_ANALY_CANDS)   # ✅ 필수
-            sh_record = _find_sheet(wb, SHEET_RECORD_CANDS)  # ✅ 필수
+            # 2. GUI에서 입력받은 후보 이름으로 실제 시트 찾기
+            sh_cover  = _find_sheet(wb, list(sheet_cover_cands))   # 선택 (없으면 패스)
+            sh_analy  = _find_sheet(wb, list(sheet_analy_cands))   # 필수
+            sh_record = _find_sheet(wb, list(sheet_record_cands))  # 필수
 
+            # 필수 시트 체크
             missing = []
-            if not sh_analy:
-                missing.append(SHEET_ANALY_CANDS[0] if SHEET_ANALY_CANDS else "분석일지시트")
-            if not sh_record:
-                missing.append(SHEET_RECORD_CANDS[0] if SHEET_RECORD_CANDS else "측정기록부시트")
-
-            # ✅ 커버는 없어도 OK
+            if not sh_analy: missing.append("분석일지")
+            if not sh_record: missing.append("측정기록부")
             if missing:
                 raise RuntimeError(f"필수 시트를 찾지 못했습니다: {', '.join(missing)}")
 
+            # 3. PDF 조각들을 담을 리스트
+            pdf_parts = []
+            
+            # (1) 시험항목날짜서명: 일치하는 시트가 있을 때만 추출
+            if sh_cover:
+                p_cover = os.path.join(tmp_dir, f"{base_name}_p1.pdf")
+                wb.Worksheets(sh_cover).ExportAsFixedFormat(0, p_cover)
+                if os.path.isfile(p_cover):
+                    pdf_parts.append(p_cover)
+
+            # (2) 분석일지 추출
+            p_analy = os.path.join(tmp_dir, f"{base_name}_p2.pdf")
+            wb.Worksheets(sh_analy).ExportAsFixedFormat(0, p_analy)
+            pdf_parts.append(p_analy)
+
+            # (3) 측정기록부 추출
+            p_record = os.path.join(tmp_dir, f"{base_name}_p3.pdf")
+            wb.Worksheets(sh_record).ExportAsFixedFormat(0, p_record)
+            pdf_parts.append(p_record)
+
+            # 4. 추출된 조각들을 순서대로 '딱 한 번만' 병합하여 최종본 생성
+            merge_pdfs(pdf_parts, final_pdf)
+
+            # 5. 업로드용 파일 생성 (필요한 경우만 참조)
+            # 업로드1: [커버(있으면) + 분석일지]
+            upload1 = os.path.join(tmp_dir, f"{base_name}__업로드1(분석일지).pdf")
+            merge_pdfs(pdf_parts[:-1] if sh_cover else [p_analy], upload1)
+            
+            # 업로드2: [측정기록부] 단독
+            upload2 = os.path.join(tmp_dir, f"{base_name}__업로드2(측정기록부).pdf")
+            shutil.copy2(p_record, upload2)
+
+            return {"upload1": upload1, "upload2": upload2, "final": final_pdf}
+
         finally:
-            try:
-                if wb is not None:
+            # 작업이 끝나면 반드시 엑셀 닫기
+            if wb is not None:
+                try:
                     wb.Close(False)
-            except Exception:
-                pass
-
-        # ---- 개별 시트 PDF ----
-        ok_cover = False
-        if sh_cover:
-            ok_cover = self.export_sheet_pdf(excel_path, sh_cover, cover_pdf)  # 선택
-
-        ok_analy = self.export_sheet_pdf(excel_path, sh_analy, analy_pdf)      # 필수
-        ok_record = self.export_sheet_pdf(excel_path, sh_record, record_pdf)   # 필수
-
-        # ✅ 필수 2개는 실패하면 즉시 실패
-        if not (ok_analy and ok_record):
-            miss = []
-            if not ok_analy: miss.append("분석일지")
-            if not ok_record: miss.append("측정기록부")
-            raise RuntimeError(f"PDF 생성 실패(필수 시트 ExportAsFixedFormat 실패): {', '.join(miss)}")
-
-        # ---- 업로드1 ----
-        # 커버가 있으면: 커버+분석일지 / 없으면: 분석일지 단독
-        if ok_cover and os.path.isfile(cover_pdf):
-            merge_pdfs([cover_pdf, analy_pdf], upload1)
-        else:
-            shutil.copy2(analy_pdf, upload1)
-
-        # ---- 업로드2 (측정기록부 단독
-        shutil.copy2(record_pdf, upload2)
-
-        # ---- 최종본 ----
-        # 커버가 있으면: 커버+분석일지+측정기록부 / 없으면: 분석일지+측정기록부
-        if ok_cover and os.path.isfile(cover_pdf):
-            merge_pdfs([cover_pdf, analy_pdf, record_pdf], final_pdf)
-        else:
-            merge_pdfs([analy_pdf, record_pdf], final_pdf)
-
-        return {"upload1": upload1, "upload2": upload2, "final": final_pdf}
+                except:
+                    pass
 
 
 
@@ -263,8 +249,8 @@ class AppBase:
             self.root = tk.Tk()
 
         self.root.title("PDF 최종본 생성기")
-        self.root.geometry("860x650")
-        self.root.minsize(820, 600)
+        self.root.geometry("860x700")
+        self.root.minsize(820, 660)
 
         self._build_ui()
 
