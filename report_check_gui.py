@@ -148,8 +148,8 @@ class ReportCheckFileListGUI:
         else:
             self.root = tk.Tk()
         self.root.title("성적서 검토 - 파일 리스트 - " + APP_VERSION)
-        self.root.geometry("900x650")
-        self.root.minsize(860, 620)
+        self.root.geometry("600x650")
+        self.root.minsize(550, 620)
         set_window_topmost(self.root)
 
         self._build_ui()
@@ -288,7 +288,8 @@ class ReportCheckFileListGUI:
         self.lst.delete(0, "end")
         for p in self.files:
             sn = extract_sample_from_name(p)
-            show = f"{sn}  |  {p}" if sn else p
+            file_name = os.path.basename(p)
+            show = f"{sn}  |  {file_name}" if sn else file_name
             self.lst.insert("end", show)
 
     def _add_paths(self, paths):
