@@ -98,6 +98,25 @@ def sample_to_datestr(sample_no: str) -> str:
         return None
 
 
+def parse_ymd_date(value):
+    """YYYY-MM-DD 형식 값을 date 로 파싱"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+
+    s = str(value).strip()
+    if not s:
+        return None
+
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
 def parse_sn_date(sn: str):
     """시료번호에서 날짜만 추출"""
     m = re.match(r"^[A-Za-z](\d{2})(\d{2})(\d{2})", sn)
@@ -137,6 +156,27 @@ def extract_sn_text(x) -> str:
         return ""
     m = re.search(r"[A-Za-z]\d{7}-\d{2,3}", s)
     return m.group(0).upper() if m else ""
+
+
+def extract_sample_from_name(path_or_text: str) -> str:
+    """파일명/폴더명/텍스트에서 시료번호 추출"""
+    s = str(path_or_text or "").strip().upper()
+    if not s:
+        return ""
+
+    s = s.replace("–", "-").replace("—", "-").replace("−", "-")
+
+    base = s
+    if "\\" in s or "/" in s:
+        base = s.replace("/", "\\").rsplit("\\", 1)[-1]
+    stem = re.sub(r"\.[^.]+$", "", base)
+    compact = re.sub(r"\s+", "", stem)
+
+    m = re.search(r"(?<![A-Z0-9])(A\d{7}-\d{2})(?!\d)", compact)
+    if m:
+        return m.group(1)
+
+    return ""
 
 
 def parse_time(s):

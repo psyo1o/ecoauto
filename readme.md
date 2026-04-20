@@ -1,6 +1,6 @@
 # 프로젝트 구조 설명서
 
-> 마지막 업데이트: 2026-04-19 (eco_input_gui 레이아웃 개선 — 파일추가/DnD/모드별 활성화)
+> 마지막 업데이트: 2026-04-20 (시료번호/날짜/NAS 검색 공통화, 파일명 기준 비산먼지 판정 정리)
 
 ---
 
@@ -66,12 +66,12 @@
             ├─ selenium_utils.py  (브라우저 조작)
             ├─ realgrid_utils.py  (리얼그리드 입력)
             ├─ select2_utils.py   (드롭다운 조작)
-            ├─ excel_utils.py     (성적서 파싱)
+            ├─ excel_utils.py     (성적서 파싱, 파일명 기준 비산먼지 판정 반영)
             ├─ excel_com_utils.py (Excel COM 관리)
             ├─ pdf_utils.py       (PDF 생성/병합)
-            ├─ data_utils.py      (시료번호 파싱)
-            ├─ format_utils.py    (숫자/시간 서식)
-            ├─ file_utils.py      (NAS 파일 검색)
+            ├─ data_utils.py      (시료번호/날짜 파싱 공통)
+            ├─ format_utils.py    (숫자/시간/DateTime 변환 공통)
+            ├─ file_utils.py      (NAS 파일 검색/시료 목록 수집/비산먼지 파일명 판정)
             └─ log_utils.py       (에러 로그)
 ```
 
@@ -86,9 +86,9 @@
             ├─ selenium_utils.py
             ├─ realgrid_utils.py  (API로 사이트값 읽기)
             ├─ excel_utils.py     (엑셀 기대값 생성)
-            ├─ data_utils.py
-            ├─ format_utils.py
-            ├─ file_utils.py
+            ├─ data_utils.py      (시료번호/날짜 파싱 공통)
+            ├─ format_utils.py    (DateTime 변환 공통)
+            ├─ file_utils.py      (NAS 검색, 비산먼지 파일명 판정)
             └─ log_utils.py
 ```
 
@@ -97,8 +97,8 @@
 ```
 3.발송대장 검토.bat
   └─ receipt.py               ← GUI + 로직 통합
-       ├─ file_utils.py
-       ├─ data_utils.py
+     ├─ file_utils.py      (NAS 검색 공통)
+     ├─ data_utils.py      (시료번호/시간 파싱 공통)
        └─ log_utils.py
 ```
 
@@ -107,8 +107,8 @@
 ```
 4.종합 검토.bat
   └─ dash.py                  ← GUI + 로직 통합
-       ├─ data_utils.py
-       ├─ format_utils.py
+     ├─ data_utils.py      (시료번호/시간 파싱 공통)
+     ├─ format_utils.py    (시간/DateTime 변환 공통)
        └─ log_utils.py
 ```
 

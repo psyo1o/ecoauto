@@ -26,10 +26,10 @@ from openpyxl.formatting.rule import FormulaRule
 # 공통 유틸 모듈 (모듈화)
 # ============================================================
 from selenium_utils import safe_click, wait_el as wait_until_exists, close_popup, set_date_js, wait
-from format_utils import format_time as trim_time_to_hm, to_float1, to_float2
+from format_utils import format_time as trim_time_to_hm, to_float1, to_float2, parse_datetime_text
 from data_utils import norm_ymd, sample_to_datestr, clean_leading_mark
 from excel_utils import find_sheet_by_candidates as _find_sheet_by_candidates_openpyxl
-from file_utils import find_excel_for_sample as _find_excel_util
+from file_utils import find_best_matching_file as _find_best_file_util, is_fugitive_dust_file
 from measin_utils import (
     login, search_date, wait_grid_loaded, get_samples_current_page,
     open_sample_detail, go_back_to_list, collect_samples_from_files,
@@ -442,8 +442,14 @@ def read_site_data(driver, sample_no):
 # NAS 검색 / 엑셀 읽기 / 비교 / 저장 (원본 그대로 유지)
 # ------------------------------------------------------------
 def find_excel_for_sample(sample_no):
-    """file_utils.find_excel_for_sample 래퍼 (eco_check 호환)"""
-    result = _find_excel_util(sample_no, nas_base=NAS_BASE, nas_dirs=NAS_DIRS, strict=True)
+    """NAS 에서 sample_no 와 정확 형식 일치 엑셀 파일 검색 (strict)"""
+    result = _find_best_file_util(
+        sample_no,
+        nas_base=NAS_BASE,
+        nas_dirs=NAS_DIRS,
+        extensions=(".xlsm", ".xlsx", ".xls"),
+        strict=True,
+    )
     if not result:
         print(" ❌ 엑셀 없음:", sample_no)
     return result
@@ -803,14 +809,7 @@ def compare_list(sample, field, site_list, excel_list):
 
 
 def _pd(s):
-    if not s:
-        return None
-    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
-        try:
-            return datetime.strptime(s, fmt)
-        except:
-            pass
-    return None
+    return parse_datetime_text(s)
 
 
 def compare_mobile_single(sample, label, t, es, ee):
@@ -1094,7 +1093,7 @@ def main():
             if not xlsx:
                 go_back_to_list(driver)
                 continue
-            is_dust = ("비산" in os.path.basename(str(xlsx)))
+            is_dust = is_fugitive_dust_file(str(xlsx))
             excel = parse_measuring_record(str(xlsx), sample_no)
             COMPANY_MAP[sample_no] = excel.get("업소명", "")
             # --------------------------------------------------

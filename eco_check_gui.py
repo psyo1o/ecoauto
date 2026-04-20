@@ -15,6 +15,7 @@ import threading
 import builtins
 
 # 공통 모듈 import
+from data_utils import parse_ymd_date
 from gui_common import LogPanel, set_window_topmost, create_labeled_entry
 
 # 메인 로직 import
@@ -126,9 +127,7 @@ class EcoCheckGUI:
             messagebox.showwarning("입력 오류", "ID / PW / 날짜는 필수입니다.")
             return
 
-        try:
-            datetime.datetime.strptime(day, "%Y-%m-%d")
-        except Exception:
+        if parse_ymd_date(day) is None:
             messagebox.showwarning("날짜 오류", "날짜 형식이 잘못되었습니다.\n(YYYY-MM-DD)")
             return
 

@@ -12,6 +12,7 @@ import win32clipboard
 from openpyxl import load_workbook
 from excel_com_utils import get_excel_app
 from data_utils import sample_to_datestr
+from file_utils import is_fugitive_dust_file
 
 # =====================================================================
 # 상수
@@ -300,7 +301,7 @@ def export_backdata_moist_thc(excel_path: str, sample_no: str):
     - Excel 앱은 전역 1개 재사용(프로그램 끝에서 close_excel_app()로 닫기)
     """
     # ✅ 비산먼지 스킵
-    if ("비산먼지" in os.path.basename(excel_path)) or ("비산" in os.path.basename(excel_path)):
+    if is_fugitive_dust_file(excel_path):
         print("▶ 비산먼지 성적서 → 백데이터 스킵")
         return
 
