@@ -118,9 +118,32 @@ def find_excel_for_sample(sample_no: str,
     strict=False : sample_no로 시작하면 모두 허용, 우선순위 xlsm > xlsx > xls
     ~$ 임시파일 항상 제외.
     """
-    import re
-    exts = (".xlsm", ".xlsx", ".xls")
+    return find_best_matching_file(
+        sample_no=sample_no,
+        nas_base=nas_base,
+        nas_dirs=nas_dirs,
+        extensions=(".xlsm", ".xlsx", ".xls"),
+        strict=strict,
+    )
+
+
+def find_best_matching_file(sample_no: str,
+                            nas_base: str = "",
+                            nas_dirs: list = None,
+                            extensions: tuple | list = (),
+                            strict: bool = True) -> str | None:
+    """
+    NAS_DIRS 전체에서 sample_no 기준으로 가장 적절한 파일 1개 반환.
+    - strict=True  : sample_no 바로 뒤에 숫자가 오면 제외
+    - strict=False : sample_no 로 시작하면 모두 허용
+    - 확장자 우선순위와 경로 길이 우선순위는 기존 find_excel_for_sample 동작 유지
+    """
+    if not sample_no:
+        return None
+
     pattern = re.compile(rf"^{re.escape(sample_no)}(?!\d)", re.IGNORECASE)
+    lower_sample = sample_no.lower()
+    extensions = tuple(ext.lower() for ext in (extensions or ()))
     candidates = []
 
     for d in (nas_dirs or []):
@@ -131,26 +154,94 @@ def find_excel_for_sample(sample_no: str,
             for f in files:
                 if f.startswith("~$"):
                     continue
+
                 lf = f.lower()
-                if not any(lf.endswith(e) for e in exts):
+                if extensions and not any(lf.endswith(ext) for ext in extensions):
                     continue
+
                 stem = os.path.splitext(f)[0]
                 if strict:
                     if not pattern.match(stem):
                         continue
                 else:
-                    if not stem.lower().startswith(sample_no.lower()):
+                    if not stem.lower().startswith(lower_sample):
                         continue
+
                 candidates.append(os.path.join(root, f))
 
     if not candidates:
         return None
 
-    def _rank(p):
-        lp = p.lower()
-        if lp.endswith(".xlsm"): return 0
-        if lp.endswith(".xlsx"): return 1
-        return 2
+    def _rank(path):
+        lower_path = path.lower()
+        for index, ext in enumerate(extensions):
+            if lower_path.endswith(ext):
+                return index
+        return len(extensions)
 
-    candidates.sort(key=lambda p: (_rank(p), len(p)))
+    candidates.sort(key=lambda path: (_rank(path), len(path)))
     return candidates[0]
+
+
+def is_fugitive_dust_file(file_name: str, keywords: tuple | list = ("비산먼지",)) -> bool:
+    """파일명에 '비산먼지'가 포함될 때만 비산먼지 성적서로 판별"""
+    if not file_name:
+        return False
+    base_name = os.path.basename(str(file_name))
+    return any(keyword in base_name for keyword in (keywords or ()))
+
+
+def collect_samples_from_nas(nas_base: str,
+                             nas_dirs: list = None,
+                             date_str: str = "",
+                             team_nos=None,
+                             sample_pattern: str = r"^(A\d{6}\d-\d{2})",
+                             dust_keywords: tuple | list = ("비산먼지",)) -> list:
+    """
+    NAS 하위 폴더를 재귀 탐색해 시료 목록을 수집.
+    반환 형식: [{"sample": sample_no, "path": full_path, "dust": bool}, ...]
+
+    기존 eco_input.extract_samples_from_nas 동작 유지:
+    - 파일명 시작부분의 AYYMMDDT-XX 패턴만 사용
+    - date_str 는 YYYY-MM-DD 기준으로 YYMMDD 비교
+    - team_nos 가 비어있으면 전체 허용
+    - dust 는 파일명에 정확히 '비산먼지' 포함 여부로 판단
+    """
+    sample_list = []
+    pattern = re.compile(sample_pattern)
+    date_key = str(date_str or "").replace("-", "")[2:]
+
+    if isinstance(team_nos, (int, str)):
+        normalized_team_nos = [str(team_nos)]
+    elif team_nos:
+        normalized_team_nos = [str(team_no) for team_no in team_nos]
+    else:
+        normalized_team_nos = []
+
+    for nas_dir in (nas_dirs or []):
+        folder = os.path.join(nas_base, nas_dir)
+        if not os.path.isdir(folder):
+            continue
+
+        for root, dirs, files in os.walk(folder):
+            for file_name in files:
+                if file_name.startswith("~$"):
+                    continue
+
+                match = pattern.match(file_name)
+                if not match:
+                    continue
+
+                sample_no = match.group(1)
+                if date_key and sample_no[1:7] != date_key:
+                    continue
+                if normalized_team_nos and sample_no[7] not in normalized_team_nos:
+                    continue
+
+                sample_list.append({
+                    "sample": sample_no,
+                    "path": os.path.join(root, file_name),
+                    "dust": is_fugitive_dust_file(file_name, dust_keywords),
+                })
+
+    return sample_list

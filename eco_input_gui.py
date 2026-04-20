@@ -47,6 +47,7 @@ except Exception:
 # 모듈 레벨에서 import하면 tkdnd DLL과 충돌함 → lazy import
 # ------------------------------
 from gui_common import LogPanel, set_window_topmost, set_state_recursive
+from data_utils import extract_sample_from_name as common_extract_sample_from_name, parse_ymd_date
 
 
 def _parse_drop_files(data: str):
@@ -72,24 +73,7 @@ def _parse_drop_files(data: str):
 
 
 def _extract_sample_from_name(path_or_text: str) -> str:
-    s = os.path.basename(str(path_or_text)).strip().upper()
-    s = os.path.splitext(s)[0]
-    s = s.replace("–", "-").replace("—", "-").replace("−", "-")
-    s = re.sub(r"\s+", "", s)
-
-    m = re.search(r"(A\d{7,9}-\d{1,2})", s)
-    if m:
-        head = m.group(1)
-        m2 = re.match(r"^(A\d{7,9})-(\d{1,2})$", head)
-        if m2:
-            return f"{m2.group(1)}-{int(m2.group(2)):02d}"
-        return head
-
-    m = re.search(r"(A\d{7,9})(\d{2})$", s)
-    if m:
-        return f"{m.group(1)}-{int(m.group(2)):02d}"
-
-    return ""
+    return common_extract_sample_from_name(path_or_text)
 
 
 class EcoInputGUI:
@@ -683,9 +667,7 @@ class EcoInputGUI:
                 messagebox.showwarning("입력 오류", "날짜를 입력해 주세요.", parent=self.root)
                 return None
                 
-            try:
-                datetime.datetime.strptime(date_str, "%Y-%m-%d")
-            except ValueError:
+            if parse_ymd_date(date_str) is None:
                 messagebox.showwarning("입력 오류", "날짜 형식: YYYY-MM-DD", parent=self.root)
                 return None
                 

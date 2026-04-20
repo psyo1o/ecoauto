@@ -88,6 +88,7 @@ from datetime import datetime as _datetime, timedelta as _timedelta
 
 _num_only_re = _re.compile(r"^-?\d+(\.\d+)?$")
 _extract_nums_re = _re.compile(r"-?\d+(?:\.\d+)?")
+_excel_base_datetime = _datetime(1899, 12, 30)
 
 
 def to_float_if_pure_number(v):
@@ -121,6 +122,39 @@ def extract_numbers_from_cell(v) -> list:
     return out
 
 
+def excel_serial_to_datetime(value):
+    """엑셀 serial 숫자를 datetime 으로 변환"""
+    if not isinstance(value, (int, float)):
+        return None
+    try:
+        return _excel_base_datetime + _timedelta(days=float(value))
+    except Exception:
+        return None
+
+
+def parse_datetime_text(value, fmts=None):
+    """문자열을 지정된 datetime 포맷들로 파싱"""
+    if value is None:
+        return None
+    if isinstance(value, _datetime):
+        return value
+
+    s = str(value).strip()
+    if not s:
+        return None
+
+    formats = fmts or (
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d %H:%M:%S",
+    )
+    for fmt in formats:
+        try:
+            return _datetime.strptime(s, fmt)
+        except Exception:
+            pass
+    return None
+
+
 def to_datetime_if_possible(v):
     """
     다양한 형식의 값을 datetime으로 변환.
@@ -131,10 +165,7 @@ def to_datetime_if_possible(v):
     if isinstance(v, _datetime):
         return v
     if isinstance(v, (int, float)):
-        try:
-            return _datetime(1899, 12, 30) + _timedelta(days=float(v))
-        except Exception:
-            return None
+        return excel_serial_to_datetime(v)
     s = str(v).strip()
     if not s:
         return None
@@ -144,12 +175,7 @@ def to_datetime_if_possible(v):
         "%Y년 %m월 %d일", "%Y년 %m월 %d일 %H:%M",
         "%H:%M",
     ]
-    for fmt in fmts:
-        try:
-            return _datetime.strptime(s, fmt)
-        except Exception:
-            pass
-    return None
+    return parse_datetime_text(s, fmts)
 
 
 def is_excel_base_date(dt_obj) -> bool:
@@ -157,7 +183,7 @@ def is_excel_base_date(dt_obj) -> bool:
     if dt_obj is None:
         return False
     return dt_obj.date() in (
-        _datetime(1899, 12, 30).date(),
+        _excel_base_datetime.date(),
         _datetime(1899, 12, 31).date()
     )
 

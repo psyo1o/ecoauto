@@ -27,7 +27,7 @@ DEFAULT_ENGINEER_DIR = r"\\192.168.10.163\측정팀\2.성적서"
 # ============================================================
 from data_utils import (
     normalize_company, normalize_plate, normalize_name, normalize_names_cell,
-    parse_time, parse_time_range_text
+    parse_time, parse_time_range_text, parse_ymd_date
 )
 
 ###############################################################
@@ -198,9 +198,8 @@ def parse_drive_log(path):
         elif isinstance(raw_date, dt.date):
             day = raw_date
         else:
-            try:
-                day = dt.datetime.strptime(str(raw_date).strip(), "%Y-%m-%d").date()
-            except:
+            day = parse_ymd_date(raw_date)
+            if day is None:
                 continue
 
         engineers = normalize_names_cell(raw_engineer)

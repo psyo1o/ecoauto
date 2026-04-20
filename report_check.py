@@ -55,7 +55,7 @@ from format_utils import (
     to_datetime_if_possible, is_excel_base_date, align_to_date,
     strip_seconds, fmt_hhmm, fmt_range
 )
-from file_utils import find_excel_for_sample as _find_excel_util
+from file_utils import find_best_matching_file as _find_best_file_util
 from excel_utils import find_sheet_by_candidates
 from excel_com_utils import get_excel_app
 
@@ -90,8 +90,14 @@ def clear_clipboard(excel_app=None):
 # 엑셀 파일 찾기
 # ============================================================
 def find_excel(sample, folder):
-    """file_utils.find_excel_for_sample 래퍼 (단일 폴더 검색)"""
-    result = _find_excel_util(sample, nas_base=folder, nas_dirs=[""], strict=True)
+    """단일 폴더에서 sample 과 정확 형식 일치 엑셀 파일 검색 (strict)"""
+    result = _find_best_file_util(
+        sample,
+        nas_base=folder,
+        nas_dirs=[""],
+        extensions=(".xlsm", ".xlsx", ".xls"),
+        strict=True,
+    )
     if result:
         log(f" → 발견: {result}")
     else:

@@ -9,6 +9,7 @@ from datetime import datetime
 from openpyxl import load_workbook
 from openpyxl.utils import range_boundaries
 from format_utils import format_time, to_float1, to_float2
+from file_utils import is_fugitive_dust_file
 
 def find_sheet_by_candidates(wb, candidates: list):
     """후보 시트명 리스트에서 워크북에 존재하는 첫 번째 시트 반환."""
@@ -33,9 +34,10 @@ def parse_measuring_record(excel_path: str, sample_no: str) -> dict:
     """
     대기측정기록부 및 입력 시트에서 모든 데이터를 긁어와 딕셔너리로 반환합니다.
     (eco_input, eco_check, report_check 모두 호환)
+    파일명 기준 비산먼지 판정은 '비산먼지' 포함일 때만 True 입니다.
     """
     wb = load_workbook(excel_path, data_only=True)
-    is_dust = "비산먼지" in os.path.basename(excel_path) or "비산" in os.path.basename(excel_path)
+    is_dust = is_fugitive_dust_file(excel_path)
 
     # 1. 대기측정기록부 시트 파싱
     ws_name = "대기측정기록부" if "대기측정기록부" in wb.sheetnames else wb.sheetnames[0]

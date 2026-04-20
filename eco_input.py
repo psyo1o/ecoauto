@@ -57,7 +57,7 @@ from measin_utils import (
     LOGIN_URL, FIELD_URL, NAS_BASE, NAS_DIRS
 )
 from format_utils import format_time as trim_hm, to_f1, to_f2
-from data_utils import sample_to_datestr, clean_leading_mark as clean
+from data_utils import parse_ymd_date, sample_to_datestr, clean_leading_mark as clean
 from realgrid_utils import (
     rg_dump_headers, rg_find_col, rg_find_cols, rg_get_body, rg_api_write_data, 
     rg_scroll_top, rg_find_tr_by_item, rg_paste_to_tr, rg_paste_to_tr_tab4, rg_set_cell_by_keys
@@ -65,7 +65,7 @@ from realgrid_utils import (
 from select2_utils import Select2Handler as _Select2Handler
 from pdf_utils import merge_pdfs as _merge_pdfs, PDFExporter as _PDFExporter
 from excel_utils import find_sheet_by_candidates as _find_sheet_by_candidates
-from file_utils import find_excel_for_sample as _find_excel_util
+from file_utils import collect_samples_from_nas as _collect_samples_from_nas_util, find_best_matching_file as _find_best_file_util, is_fugitive_dust_file
 from excel_com_utils import get_excel_app, kill_excel_app
 from log_utils import log_error
 from measin_constants import (
@@ -196,15 +196,27 @@ def parse_sample_input(s: str):
 
 
 def find_sample_file_in_nas(sample_no: str):
-    """대기 NAS에서 엑셀 파일 검색"""
-    return _find_excel_util(sample_no, nas_base=NAS_BASE, nas_dirs=NAS_DIRS, strict=False)
+    """대기 NAS에서 sample_no 접두 일치 엑셀 파일 검색 (loose)"""
+    return _find_best_file_util(
+        sample_no,
+        nas_base=NAS_BASE,
+        nas_dirs=NAS_DIRS,
+        extensions=(".xlsm", ".xlsx", ".xls"),
+        strict=False,
+    )
 
 
 def find_sample_file_in_water_nas(sample_no: str):
     """수질 NAS에서 엑셀 파일 검색.
     경로 구조: NAS_BASE_WATER\YYYY년\업체명\파일.xlsm  (하위 전체 재귀)
     """
-    return _find_excel_util(sample_no, nas_base=NAS_BASE_WATER, nas_dirs=[""], strict=False)
+    return _find_best_file_util(
+        sample_no,
+        nas_base=NAS_BASE_WATER,
+        nas_dirs=[""],
+        extensions=(".xlsm", ".xlsx", ".xls"),
+        strict=False,
+    )
 
 
 def ask_yesno(msg, default_yes=True):
@@ -250,48 +262,16 @@ def extract_samples_from_nas(team_nos, date_str): # 파라미터 이름 변경
     """
     파일명에서 시작부분 AYYMMDDT-XX 추출.
     team_nos(리스트 또는 문자열 튜플), 날짜(YYMMDD) 일치하는 파일만 목록에 추가.
-    파일명에 '비산먼지' 포함 시 dust=True
+    파일명에 정확히 '비산먼지' 포함 시 dust=True
     """
-    sample_list=[]
-    pat=re.compile(r"^(A\d{6}\d-\d{2})")
-
-    date_key = date_str.replace("-", "")[2:]
-
-    # team_nos가 단일 값(int/str)이면 리스트로 변환
-    if isinstance(team_nos, (int, str)):
-        team_nos = [str(team_nos)]
-    else:
-        team_nos = [str(t) for t in team_nos]
-
-    for d in NAS_DIRS:
-        folder=os.path.join(NAS_BASE,d)
-        if not os.path.isdir(folder): continue
-
-        for root,dirs,files in os.walk(folder):
-            for f in files:
-                if f.startswith("~$"): continue
-                m=pat.match(f)
-                if not m: continue
-
-                sample_no=m.group(1)
-
-                # 날짜 필터
-                if sample_no[1:7] != date_key:
-                    continue
-
-                # 팀 필터 ↓↓↓ (여러 팀 중 하나라도 일치하면 통과, team_nos가 비어있으면 전체 통과)
-                if team_nos and (sample_no[7] not in team_nos):
-                    continue
-
-                dust = ("비산먼지" in f)
-
-                sample_list.append({
-                    "sample": sample_no,
-                    "path": os.path.join(root,f),
-                    "dust": dust
-                })
-
-    return sample_list
+    return _collect_samples_from_nas_util(
+        nas_base=NAS_BASE,
+        nas_dirs=NAS_DIRS,
+        date_str=date_str,
+        team_nos=team_nos,
+        sample_pattern=r"^(A\d{6}\d-\d{2})",
+        dust_keywords=("비산먼지",),
+    )
 
 # =====================================================================
 # 사이트 상세 진입 – 시료번호 검색 방식
@@ -642,9 +622,8 @@ def _should_draft_by_sampling_end(date_str: str, end_hm: str) -> bool:
     end_hm = str(end_hm).strip()
 
     # 날짜 파싱
-    try:
-        meas_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-    except Exception:
+    meas_date = parse_ymd_date(date_str)
+    if meas_date is None:
         return False
 
     # 시간 파싱
@@ -1528,7 +1507,7 @@ def _main_air():
             p = find_sample_file_in_nas(sn)
             if not p:
                 print(f"⚠ NAS에서 파일 못 찾음: {sn} → 스킵"); continue
-            dust = ("비산먼지" in os.path.basename(p)) or ("비산" in os.path.basename(p))
+            dust = is_fugitive_dust_file(p)
             ds = sample_to_datestr(sn)
             if not ds:
                 print(f"⚠ 날짜 파싱 실패: {sn} → 스킵"); continue

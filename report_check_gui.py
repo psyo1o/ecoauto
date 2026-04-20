@@ -47,6 +47,7 @@ except Exception:
 IMPORT_ERR = None
 try:
     from gui_common import LogPanel, set_window_topmost
+    from data_utils import extract_sample_from_name as common_extract_sample_from_name
     import report_check
     try:
         import pythoncom  # type: ignore
@@ -89,30 +90,7 @@ def extract_sample_from_name(path_or_text: str) -> str:
     - 가장 흔한 패턴: A + 숫자(7~9) + - + 순번(1~2)
       예) A2512313-03, A2501011-1 등
     """
-    s = os.path.basename(str(path_or_text)).strip().upper()
-    s = os.path.splitext(s)[0]
-    s = s.replace("–", "-").replace("—", "-").replace("−", "-")
-    s = re.sub(r"\s+", "", s)
-
-    m = re.search(r"(A\d{7,9}-\d{1,2})", s)
-    if m:
-        head = m.group(1)
-        m2 = re.match(r"^(A\d{7,9})-(\d{1,2})$", head)
-        if m2:
-            return f"{m2.group(1)}-{int(m2.group(2)):02d}"
-        return head
-
-    # 하이픈이 없는 경우(마지막 2자리를 순번으로 가정)
-    m = re.search(r"(A\d{7,9})(\d{2})$", s)
-    if m:
-        return f"{m.group(1)}-{int(m.group(2)):02d}"
-
-    # 텍스트로 들어온 시료번호 그대로도 허용 (최소 검증)
-    if re.fullmatch(r"A\d{7,9}-\d{1,2}", s):
-        a, b = s.split("-")
-        return f"{a}-{int(b):02d}"
-
-    return ""
+    return common_extract_sample_from_name(path_or_text)
 
 
 class ReportCheckFileListGUI:
