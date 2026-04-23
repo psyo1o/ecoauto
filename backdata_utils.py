@@ -7,7 +7,7 @@
 """
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import win32clipboard
 from openpyxl import load_workbook
 from excel_com_utils import get_excel_app
@@ -127,6 +127,53 @@ def _year_month_folder_from_sample(sample_no: str):
     yyyy, mm, _ = ds.split("-")
     mm_int = int(mm)
     return yyyy, f"{mm_int}월"
+
+
+def _should_skip_until_end(sample_no: str, item_name: str, end_time_value) -> bool:
+    """
+    항목별 실제 종료시각이 지나기 전이면 생성을 건너뛴다.
+    - 과거 날짜는 생성 허용
+    - 미래 날짜는 무조건 스킵
+    - 오늘은 현재 시각과 비교
+    """
+    date_str = sample_to_datestr(sample_no)
+    if not date_str or end_time_value is None:
+        return False
+
+    if isinstance(end_time_value, datetime):
+        end_time_obj = end_time_value.time().replace(second=0, microsecond=0)
+    else:
+        try:
+            end_time_obj = datetime.strptime(str(end_time_value).strip(), "%H:%M").time()
+        except Exception:
+            try:
+                end_time_obj = datetime.strptime(str(end_time_value).strip(), "%H:%M:%S").time()
+            except Exception:
+                return False
+
+    try:
+        sample_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except Exception:
+        return False
+
+    now = datetime.now()
+    end_dt = datetime.combine(sample_date, end_time_obj)
+
+    if sample_date < now.date():
+        return False
+    if sample_date > now.date():
+        print(
+            f"⚠ {item_name} 백데이터 생성 스킵: 현재시간 {now.strftime('%Y-%m-%d %H:%M')}, "
+            f"{item_name} 채취끝 {end_dt.strftime('%Y-%m-%d %H:%M')}"
+        )
+        return True
+    if now < end_dt:
+        print(
+            f"⚠ {item_name} 백데이터 생성 스킵: 현재시간 {now.strftime('%Y-%m-%d %H:%M')}, "
+            f"{item_name} 채취끝 {end_dt.strftime('%Y-%m-%d %H:%M')}"
+        )
+        return True
+    return False
 
 
 # =====================================================================
@@ -315,13 +362,22 @@ def export_backdata_moist_thc(excel_path: str, sample_no: str):
     
     # 수분 조건
     need_moist = False
+    moist_end_time = None
     try:
         ws_in = wb["입력"] if "입력" in wb.sheetnames else None
         if ws_in is not None:
             b18 = "" if ws_in["B18"].value is None else str(ws_in["B18"].value).strip()
             need_moist = (b18 == "사용") and ("수분량자동측정" in wb.sheetnames)
+            if need_moist and ws_in["B23"].value is not None:
+                from data_utils import excel_value_to_time
+                moist_start_time = excel_value_to_time(ws_in["B23"].value)
+                if moist_start_time is not None:
+                    moist_end_time = (
+                        datetime.combine(datetime.today().date(), moist_start_time) + timedelta(minutes=5)
+                    ).time()
     except:
         need_moist = False
+        moist_end_time = None
 
     # THC 조건
     ws_an = None
@@ -335,6 +391,7 @@ def export_backdata_moist_thc(excel_path: str, sample_no: str):
 
     need_thc = False
     is_fid_mode = False
+    thc_end_time = None
     if ws_an is not None:
         a64 = "" if ws_an["A64"].value is None else str(ws_an["A64"].value).strip()
         if a64 != "":
@@ -344,6 +401,16 @@ def export_backdata_moist_thc(excel_path: str, sample_no: str):
                 is_fid_mode = (int(float(c65)) == 1)
             except:
                 is_fid_mode = (str(c65).strip() == "1")
+
+            from data_utils import excel_value_to_time
+            raw_k64 = excel_value_to_time(ws_an["K64"].value)
+            if raw_k64 is not None:
+                if is_fid_mode:
+                    thc_end_time = raw_k64
+                else:
+                    thc_end_time = (
+                        datetime.combine(datetime.today().date(), raw_k64) + timedelta(minutes=3)
+                    ).time()
 
     # ---- 2) 엑셀 COM은 "필요할 때만" 파일 1회 Open/Close ----
     excel = None
@@ -358,12 +425,15 @@ def export_backdata_moist_thc(excel_path: str, sample_no: str):
         # -----------------------
         try:
             if need_moist:
-                out_dir = os.path.join(MOIST_ROOT, yyyy, mm_folder)
-                out_csv = os.path.join(out_dir, f"{sample_no}.csv")
+                if _should_skip_until_end(sample_no, "수분", moist_end_time):
+                    pass
+                else:
+                    out_dir = os.path.join(MOIST_ROOT, yyyy, mm_folder)
+                    out_csv = os.path.join(out_dir, f"{sample_no}.csv")
 
-                ws_m_xl = wb_xl.Worksheets("수분량자동측정")
-                _export_moist_csv_from_open_ws(excel, ws_m_xl, out_csv, max_rows=6)
-                print(f"✅ 수분 CSV 저장: {out_csv}")
+                    ws_m_xl = wb_xl.Worksheets("수분량자동측정")
+                    _export_moist_csv_from_open_ws(excel, ws_m_xl, out_csv, max_rows=6)
+                    print(f"✅ 수분 CSV 저장: {out_csv}")
             else:
                 if ws_in is None:
                     print("⚠ 수분: '입력' 시트 없음 → 스킵")
@@ -389,6 +459,9 @@ def export_backdata_moist_thc(excel_path: str, sample_no: str):
 
             out_dir = os.path.join(THC_ROOT, yyyy, mm_folder)
             os.makedirs(out_dir, exist_ok=True)
+
+            if _should_skip_until_end(sample_no, "THC", thc_end_time):
+                return
 
             if is_fid_mode:
                 # C65==1 → THC 측정값(FID) → CSV (openpyxl 그대로)
