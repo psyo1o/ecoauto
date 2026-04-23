@@ -1,238 +1,492 @@
-# 프로젝트 구조 설명서
+# 측정인 자동화 도구 안내서
 
-> 마지막 업데이트: 2026-04-23 (백데이터 항목별 종료시간 전 생성 방지 추가)
-
----
-
-## 1. 프로젝트 개요
-
-측정인.kr 사이트와 로컬 엑셀 성적서 간의 데이터 **자동 입력 / 검토 / 보고서 생성**을 수행하는 자동화 도구 모음.
-
-- **대상 사이트:** 측정인.kr (대기측정 / 수질측정)
-- **대상 엑셀:** NAS에 저장된 성적서 `.xlsm` 파일들
-- **실행 환경:** Windows + Python 3.x + Chrome + Office (COM)
+> 마지막 업데이트: 2026-04-23
+> 대상 독자: 처음 사용하는 담당자, 인수인계 받는 사용자, 운영 담당자
 
 ---
 
-## 2. 전체 아키텍처
+## 1. 이 프로그램이 하는 일
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         사용자 실행                              │
-│   .bat 파일 → GUI (tkinter) → 핵심 로직 (Selenium + openpyxl)   │
-└─────────────────────────────────────────────────────────────────┘
+이 폴더는 `측정인.kr` 사이트 업무를 빠르게 처리하기 위한 Windows 전용 자동화 도구 모음이다.
 
-┌──────────────┐    ┌──────────────┐    ┌──────────────────────┐
-│  GUI 계층     │    │  핵심 로직    │    │  공통 유틸리티 계층    │
-│              │    │              │    │                      │
-│ eco_input_gui│───→│ eco_input    │───→│ measin_utils         │
-│ eco_check_gui│───→│ eco_check    │    │ selenium_utils       │
-│ report_check │───→│ report_check │    │ realgrid_utils       │
-│   _gui       │    │              │    │ select2_utils        │
-│              │    │ receipt      │    │ data_utils           │
-│ (dash.py     │    │ dash         │    │ excel_utils          │
-│  receipt.py  │    │ Vehicle_log  │    │ excel_com_utils      │
-│  Vehicle_log │    │ tab4_pdf_gui │    │ file_utils           │
-│  = GUI+로직  │    │              │    │ format_utils         │
-│   통합형)    │    │              │    │ pdf_utils            │
-│              │    │              │    │ gui_common           │
-│              │    │              │    │ worker_utils         │
-│              │    │              │    │ log_utils            │
-└──────────────┘    └──────────────┘    └──────────────────────┘
+주요 목적은 다음과 같다.
 
-┌────────────────────────────────────────────────────────────┐
-│                     분리 모듈 (신규)                         │
-│                                                            │
-│  backdata_utils.py   ← eco_input에서 백데이터 분리    │
-│  tab4_utils.py       ← eco_input에서 탭4 로직 분리      │
-│  measin_constants.py ← 공통 상수 (input+check 공유)  │
-└────────────────────────────────────────────────────────────┘
-```
+- NAS에 저장된 성적서 엑셀 파일을 읽어 측정인.kr에 자동 입력
+- 사이트에 입력된 값과 엑셀 값을 비교 검토
+- 발송대장, 차량운행일지, 성적서 상태를 점검해 결과 보고서 생성
+- 탭4 PDF를 자동 또는 반자동으로 생성하고 최종본을 병합
+- 수분량/THC 백데이터를 규칙에 맞게 추출하여 NAS에 저장
+
+이 프로그램은 단일 실행 파일 하나가 아니라, 업무 종류별로 나뉜 7개의 도구로 구성되어 있다.
 
 ---
 
-## 3. 실행 흐름별 파일 관계
+## 2. 처음 사용할 때
 
-### 3-1. 측정인 자동입력 (대기/수질)
+### 2-1. 실행 환경
 
-```
-1.측정인 자동입력.bat
-  └─ eco_input_gui.py        ← GUI (fake_input 패턴)
-       └─ eco_input.py       ← 핵심 로직
-            ├─ backdata_utils.py ← 백데이터(수분/THC) 추출
-            ├─ tab4_utils.py     ← 탭4 입력/탐색/저장
-            ├─ measin_constants.py ← 공통 상수
-            ├─ measin_utils.py    (로그인/검색/상세페이지)
-            ├─ selenium_utils.py  (브라우저 조작)
-            ├─ realgrid_utils.py  (리얼그리드 입력)
-            ├─ select2_utils.py   (드롭다운 조작)
-            ├─ excel_utils.py     (성적서 파싱, 파일명 기준 비산먼지 판정 반영)
-            ├─ excel_com_utils.py (Excel COM 관리)
-            ├─ pdf_utils.py       (PDF 생성/병합)
-            ├─ data_utils.py      (시료번호/날짜 파싱 공통)
-            ├─ format_utils.py    (숫자/시간/DateTime 변환 공통)
-            ├─ file_utils.py      (NAS 파일 검색/시료 목록 수집/비산먼지 파일명 판정)
-            └─ log_utils.py       (에러 로그)
-```
+이 프로그램은 다음 환경을 전제로 한다.
 
-### 3-2. 측정인 검토
+- Windows PC
+- Google Chrome 설치
+- Python 3.x 설치
+- Microsoft Excel 사용 가능 환경
+- NAS 경로 `\\192.168.10.163\측정팀` 접근 가능
 
-```
-2.측정인 검토.bat
-  └─ eco_check_gui.py        ← GUI
-       └─ eco_check.py       ← 핵심 로직
-            ├─ measin_constants.py ← 공통 상수
-            ├─ measin_utils.py
-            ├─ selenium_utils.py
-            ├─ realgrid_utils.py  (API로 사이트값 읽기)
-            ├─ excel_utils.py     (엑셀 기대값 생성)
-            ├─ data_utils.py      (시료번호/날짜 파싱 공통)
-            ├─ format_utils.py    (DateTime 변환 공통)
-            ├─ file_utils.py      (NAS 검색, 비산먼지 파일명 판정)
-            └─ log_utils.py
-```
+Windows 전용인 이유는 다음 기능을 사용하기 때문이다.
 
-### 3-3. 발송대장 검토
+- Excel COM 자동화 (`win32com`, `pywin32`)
+- 파일 열기 창 자동 제어 (`pywinauto`)
+- Windows 레지스트리 수정으로 보안 경고 완화
+- `.bat` 실행 파일 기반 시작 방식
 
-```
-3.발송대장 검토.bat
-  └─ receipt.py               ← GUI + 로직 통합
-     ├─ file_utils.py      (NAS 검색 공통)
-     ├─ data_utils.py      (시료번호/시간 파싱 공통)
-       └─ log_utils.py
-```
+### 2-2. 첫 설치 순서
 
-### 3-4. 종합 검토 (대시보드)
+처음 실행하는 PC에서는 `0.처음사용시` 폴더를 먼저 사용한다.
 
-```
-4.종합 검토.bat
-  └─ dash.py                  ← GUI + 로직 통합
-     ├─ data_utils.py      (시료번호/시간 파싱 공통)
-     ├─ format_utils.py    (시간/DateTime 변환 공통)
-       └─ log_utils.py
-```
+권장 순서는 다음과 같다.
 
-### 3-5. 성적서 검토
+1. `0.처음사용시\드라이버+파이썬패키지+보안경고 통합설치.bat` 실행
+2. 설치가 끝나면 프로그램 폴더의 각 `.bat` 실행 파일 사용
 
-```
-5.성적서 검토.bat
-  └─ report_check_gui.py      ← GUI (드래그앤드롭)
-       └─ report_check.py     ← 핵심 로직
-            ├─ excel_utils.py
-            ├─ data_utils.py
-            ├─ format_utils.py
-            └─ log_utils.py
-```
+통합 설치 파일이 하는 일은 다음과 같다.
 
-### 3-6. 차량운행일지 검토
+- Python 실행 명령 확인 (`py -3` 또는 `python`)
+- Excel 신뢰 위치에 NAS 등록
+- Windows 로컬 인트라넷에 NAS 등록
+- Excel의 인터넷 차단 보안 설정 완화
+- Chrome 버전 확인 후 ChromeDriver 다운로드 및 PATH 등록
+- 필요한 Python 패키지 설치
 
-```
-6.차량운행일지 검토.bat
-  └─ Vehicle_operation_log.py  ← GUI + 로직 통합
-       ├─ data_utils.py
-       └─ log_utils.py
-```
+설치에 포함된 주요 패키지:
 
-### 3-7. PDF 생성
+- `selenium`
+- `webdriver-manager`
+- `openpyxl`
+- `pandas`
+- `pywin32`
+- `requests`
+- `pywinauto`
+- `pyperclip`
+- `PyPDF2`
+- `pypdf`
+- `tkinterdnd2`
+- `pillow`
 
-```
-7.PDF 생성.bat
-  └─ tab4_pdf_final_gui.py    ← GUI + 로직
-       ├─ pdf_utils.py
-       ├─ excel_com_utils.py
-       └─ log_utils.py
-```
+### 2-3. 설치 관련 보조 파일
+
+`0.처음사용시` 폴더에는 아래 파일들이 있다.
+
+| 파일 | 용도 |
+|------|------|
+| `드라이버+파이썬패키지+보안경고 통합설치.bat` | 처음 사용하는 PC에서 가장 먼저 실행하는 통합 설치 파일 |
+| `드라이버 자동설치(크롬).bat` | ChromeDriver만 따로 설치할 때 사용 |
+| `파이썬 패키지.bat` | Python 패키지만 다시 설치하거나 누락분만 설치할 때 사용 |
+| `보안경고시 실행.REG` | Excel 보안 경고 관련 레지스트리만 따로 적용할 때 사용 |
 
 ---
 
-## 4. 파일 분류표
+## 3. 어떤 파일을 실행하면 되는지
 
-### 4-1. GUI 계층 (사용자 인터페이스)
+실행은 `.bat` 파일을 더블클릭하면 된다. 각 배치 파일은 내부에서 대응되는 Python GUI 파일을 실행한다.
 
-| 파일 | 유형 | 설명 |
+| 배치 파일 | 실행되는 Python 파일 | 용도 |
 |------|------|------|
-| `eco_input_gui.py` | GUI 래퍼 | 자동입력 GUI (fake_input, DnD, 파일추가) |
-| `eco_check_gui.py` | GUI 래퍼 | 검토 GUI (fake_input 패턴) |
-| `report_check_gui.py` | GUI 래퍼 | 성적서 검토 GUI (드래그앤드롭) |
-| `receipt.py` | GUI+로직 통합 | 발송대장 검토 |
-| `dash.py` | GUI+로직 통합 | 종합 대시보드 |
-| `Vehicle_operation_log.py` | GUI+로직 통합 | 차량운행일지 검토 |
-| `tab4_pdf_final_gui.py` | GUI+로직 통합 | 탭4 PDF 수동 생성 |
+| `1.측정인 자동입력 V2.7.bat` | `eco_input_gui.py` | 측정인.kr 자동 입력, 백데이터, 탭4 PDF 처리 |
+| `2.측정인 검토 V2.3.bat` | `eco_check_gui.py` | 사이트 값과 엑셀 값 비교 검토 |
+| `3.발송대장 검토 V1.4.bat` | `receipt.py` | 발송대장 기준 상태 점검 |
+| `4.종합 검토 V1.5.bat` | `dash.py` | 여러 검토 결과를 종합한 대시보드 생성 |
+| `5.성적서 검토 V2.5.bat` | `report_check_gui.py` | 성적서 파일 자체 무결성 검사 |
+| `6.차량운행일지 검토 V1.6.bat` | `Vehicle_operation_log.py` | 차량운행일지/근무시간 검토 |
+| `7.PDF 생성 V1.1.bat` | `tab4_pdf_final_gui.py` | 탭4 PDF 최종본 수동 생성 |
 
-### 4-2. 핵심 로직 계층
+배치 파일은 공통적으로 다음 방식으로 동작한다.
 
-| 파일 | 줄 수 | 설명 |
-|------|------|------|
-| `eco_input.py` | ~1,700 | 측정인 사이트 자동 입력 (대기/수질) |
-| `eco_check.py` | ~1,170 | 사이트 vs 엑셀 비교 검토 |
-| `report_check.py` | ~1,480 | 성적서 내용 자체 검사 |
-| `backdata_utils.py` | ~500 | 백데이터(수분/THC) 추출, 항목별 종료시간 전 생성 방지 |
-| `tab4_utils.py` | ~443 | 탭4 입력/탐색/저장 (신규 분리) |
-| `measin_constants.py` | ~61 | 공통 상수 + CSS 셀렉터 (input+check 공유) (신규) |
-
-### 4-3. 공통 유틸리티 계층
-
-| 파일 | 줄 수 | 카테고리 | 설명 |
-|------|------|----------|------|
-| `measin_utils.py` | ~250 | 사이트 | 로그인/페이지 이동/시료검색 |
-| `selenium_utils.py` | ~174 | 사이트 | Chrome 드라이버/클릭/대기 + wait() |
-| `realgrid_utils.py` | ~291 | 사이트 | RealGrid 읽기/쓰기 |
-| `select2_utils.py` | ~60 | 사이트 | Select2 드롭다운 조작 |
-| `excel_utils.py` | ~130 | 엑셀 | openpyxl 시트찾기/파싱 |
-| `excel_com_utils.py` | ~60 | 엑셀 | Excel COM 전역 관리 |
-| `pdf_utils.py` | ~75 | 엑셀 | PDF 생성/병합 |
-| `file_utils.py` | ~130 | 파일 | NAS 파일 검색 |
-| `data_utils.py` | ~233 | 데이터 | 시료번호/시간/업체 정규화 + clean_leading_mark |
-| `format_utils.py` | ~180 | 데이터 | 숫자/날짜 서식 변환 |
-| `gui_common.py` | ~200 | GUI | Tkinter 공통 컴포넌트 |
-| `worker_utils.py` | ~120 | GUI | 백그라운드 작업/input 가로채기 |
-| `log_utils.py` | ~45 | 기타 | 에러 로그 파일 기록 |
+- 콘솔 인코딩을 UTF-8로 설정 (`chcp 65001`)
+- `pythonw`로 GUI 실행
+- 별도 콘솔창 없이 GUI 프로그램 시작
 
 ---
 
-## 5. 주요 디자인 패턴
+## 4. 업무별로 어떤 도구를 써야 하는지
 
-### fake_input 패턴
-`eco_input.py`/`eco_check.py`는 콘솔용 `input()`으로 사용자 입력을 받음.
-GUI에서는 `worker_utils.InputInterceptor`로 `input()`을 가로채서 미리 준비한 답변 배열을 순서대로 주입.
+### 4-1. 측정인 자동입력
 
-> ⚠ `input()` 호출 순서가 바뀌면 GUI의 answers 배열도 반드시 같이 수정 필요
+사용 상황:
 
-### 백데이터 생성 시점 가드
-`backdata_utils.export_backdata_moist_thc()`는 백데이터 생성 전에 항목별 종료시간을 먼저 확인한다.
+- NAS 성적서를 기준으로 측정인.kr에 자동 입력해야 할 때
+- 대기 탭1/탭2/탭4 입력이 필요할 때
+- 수질 탭4 업로드만 처리할 때
+- 백데이터와 PDF 생성까지 한 번에 처리할 때
 
-- 수분: `입력!B23` 시작시간 + 5분이 지나기 전이면 생성하지 않음
-- THC: `입력(분석값)!K64` 기준으로, FID 모드는 해당 시각 전 / PF 모드는 +3분 전이면 생성하지 않음
-- 스킵 시 로그: `⚠ 수분 백데이터 생성 스킵 ...`, `⚠ THC 백데이터 생성 스킵 ...`
+핵심 파일:
 
-### Excel COM 전역 재사용
-`excel_com_utils.get_excel_app()`으로 Excel 프로세스를 1개만 띄워 전역 재사용.
-프로그램 종료 시 `atexit`로 자동 정리.
+- `eco_input_gui.py`
+- `eco_input.py`
+- `backdata_utils.py`
+- `tab4_utils.py`
 
-### RealGrid API 직접 조작
-사이트의 RealGrid는 일반 HTML이 아니므로 JavaScript를 직접 실행하여 DataProvider/GridView API로 데이터를 읽고 씀.
-(`realgrid_utils.py`의 `_CORE_REALGRID_JS`)
+### 4-2. 측정인 검토
+
+사용 상황:
+
+- 사이트에 입력된 값과 성적서 엑셀 값이 일치하는지 확인할 때
+- 자동입력 후 검증이 필요할 때
+
+핵심 파일:
+
+- `eco_check_gui.py`
+- `eco_check.py`
+
+### 4-3. 발송대장 검토
+
+사용 상황:
+
+- 시료번호별로 성적서, 수분량, THC, PDF, 백데이터 상태를 한 번에 확인할 때
+- 발송대장 시간과 성적서 시간을 비교할 때
+
+핵심 파일:
+
+- `receipt.py`
+
+### 4-4. 종합 검토
+
+사용 상황:
+
+- 검토 결과 파일을 모아 대시보드 형태로 정리할 때
+- 인력, 차량, 장비 중복이나 시간 충돌을 종합적으로 보고 싶을 때
+
+핵심 파일:
+
+- `dash.py`
+
+### 4-5. 성적서 검토
+
+사용 상황:
+
+- 성적서 파일 자체의 구성, 값, 조건부 규칙, 시간 정합성을 점검할 때
+
+핵심 파일:
+
+- `report_check_gui.py`
+- `report_check.py`
+
+최근 반영된 검토 기준:
+
+- 입자상 채취 시간은 수분량자동측정기, 가스자동측정기 시간과 겹치면 안 됨
+- 수분량자동측정기와 가스자동측정기는 입자상보다 먼저 끝나야 함
+- 가스자동측정기 시간은 `황산화물`, `질소산화물`, `일산화탄소` 측정시간으로 판단
+- 여러 항목이 함께 측정된 경우 세 항목 시간은 서로 일치해야 함
+- sample-2 시트에 발송대장 기준 가스미터/VOC 전후값을 자동 채움
+
+### 4-6. 차량운행일지 검토
+
+사용 상황:
+
+- 차량운행일지, 발송대장, 기술인력 정보 간 정합성을 볼 때
+- 주 52시간 관련 검토를 할 때
+
+핵심 파일:
+
+- `Vehicle_operation_log.py`
+
+### 4-7. PDF 생성
+
+사용 상황:
+
+- 자동입력과 별개로 탭4 PDF 최종본만 따로 생성하고 싶을 때
+
+핵심 파일:
+
+- `tab4_pdf_final_gui.py`
 
 ---
 
-## 6. 데이터 흐름 요약
+## 5. 권장 업무 순서
 
+일반적인 대기 업무 흐름은 다음 순서로 이해하면 된다.
+
+1. 성적서 파일 준비
+2. `1.측정인 자동입력`으로 사이트 입력, 백데이터, PDF 처리
+3. `2.측정인 검토`로 사이트와 엑셀 비교
+4. `5.성적서 검토`로 파일 자체 검토
+5. 필요 시 `7.PDF 생성`으로 최종 PDF 생성
+6. 일자 단위 마감 검토 시 `3.발송대장 검토`
+7. 전체 현황 요약이 필요하면 `4.종합 검토`
+
+수질은 대기보다 단순하다.
+
+- 주로 `1.측정인 자동입력`의 수질 모드에서 탭4 업로드와 PDF 처리 중심으로 사용
+
+---
+
+## 6. 전체 구조 한눈에 보기
+
+```text
+[사용자 실행]
+  └─ .bat 실행
+      └─ tkinter GUI 실행
+          └─ 핵심 로직 호출
+              ├─ Selenium으로 측정인.kr 조작
+              ├─ openpyxl/Excel COM으로 엑셀 읽기
+              ├─ NAS에서 파일 검색/저장
+              └─ 결과 엑셀/PDF/백데이터 생성
 ```
-NAS 엑셀 성적서 (.xlsm)
-    ↓ openpyxl / Excel COM
-파이썬 딕셔너리 (per_item, data 등)
-    ↓ Selenium + JS API
-측정인.kr 사이트 RealGrid / 폼 필드
-    ↓ 비교 (eco_check)
-결과 엑셀 (.xlsx)
-```
+
+구조를 계층으로 나누면 다음과 같다.
+
+### 6-1. GUI 계층
+
+- `eco_input_gui.py`
+- `eco_check_gui.py`
+- `report_check_gui.py`
+- `receipt.py`
+- `dash.py`
+- `Vehicle_operation_log.py`
+- `tab4_pdf_final_gui.py`
+
+이 중 다음 파일은 GUI와 로직이 한 파일에 합쳐져 있다.
+
+- `receipt.py`
+- `dash.py`
+- `Vehicle_operation_log.py`
+- `tab4_pdf_final_gui.py`
+
+### 6-2. 핵심 로직 계층
+
+- `eco_input.py`
+- `eco_check.py`
+- `report_check.py`
+- `backdata_utils.py`
+- `tab4_utils.py`
+- `measin_constants.py`
+
+### 6-3. 공통 유틸리티 계층
+
+- 사이트 자동화: `measin_utils.py`, `selenium_utils.py`, `realgrid_utils.py`, `select2_utils.py`
+- 엑셀/PDF 처리: `excel_utils.py`, `excel_com_utils.py`, `pdf_utils.py`
+- 데이터/형식 변환: `data_utils.py`, `format_utils.py`
+- 파일/NAS 검색: `file_utils.py`
+- GUI 공통: `gui_common.py`, `worker_utils.py`
+- 로깅: `log_utils.py`
 
 ---
 
-## 7. 시료번호 규칙
+## 7. 주요 데이터 흐름
 
-- 형식: `{매체}{YYMMDD}{팀번호}-{순번}`
-- 예: `A2604181-03` = **대기**(A), **2026-04-18**, **1팀**, **3번째**
-- 매체: A=대기, W=수질
-- 팀번호: 1~5
-- 순번: 01~99
+### 7-1. 대기 자동입력 흐름
+
+```text
+NAS 성적서(.xlsm)
+  ↓
+eco_input.py
+  ├─ 탭1 현장측정정보 입력
+  ├─ 탭2 시료채취/측정정보 입력
+  ├─ 백데이터 생성(수분/THC)
+  ├─ 탭2 PDF 업로드
+  └─ 탭4 측정분석결과 입력
+      ↓
+측정인.kr 반영
+      ↓
+최종 PDF 저장
+```
+
+### 7-2. 수질 자동입력 흐름
+
+```text
+NAS 수질 성적서(.xlsm)
+  ↓
+eco_input.py
+  └─ 탭4만 처리
+      ├─ PDF 생성
+      ├─ 업로드
+      └─ 저장
+```
+
+### 7-3. 백데이터 생성 흐름
+
+```text
+성적서 엑셀
+  ↓
+backdata_utils.py
+  ├─ 수분량 시트 → CSV
+  └─ THC 시트 → CSV 또는 FID
+      ↓
+NAS 저장
+```
+
+중요한 동작 규칙:
+
+- 수분량 백데이터는 `입력` 시트 `B23` 시작시간 기준으로 종료 예상 시점이 지나야 생성된다.
+- THC 백데이터는 `입력(분석값)` 시트 `K64` 기준 종료 시점이 지나야 생성된다.
+- 아직 종료 전이면 파일을 만들지 않고 다음과 같은 로그가 나온다.
+  - `⚠ 수분 백데이터 생성 스킵 ...`
+  - `⚠ THC 백데이터 생성 스킵 ...`
+
+이 동작은 실제 측정 종료 전 백데이터가 먼저 만들어지는 문제를 방지하기 위한 것이다.
+
+---
+
+## 8. 주요 경로와 저장 위치
+
+프로그램은 하드코딩된 NAS 경로를 많이 사용한다. 따라서 폴더 구조가 바뀌면 여러 파일을 같이 수정해야 한다.
+
+대표 경로 예시는 다음과 같다.
+
+- 성적서 기본 NAS: `\\192.168.10.163\측정팀\2.성적서`
+- 수질 성적서 NAS: `\\192.168.10.163\측정팀\2.성적서\14.수질성적서`
+- 대기 PDF 저장 기본 경로: `\\192.168.10.163\측정팀\2.성적서\0.PDF\2.대기pdf`
+- 수질 PDF 저장 기본 경로: `\\192.168.10.163\측정팀\2.성적서\0.PDF\1.수질pdf`
+- 최종완료 경로: `\\192.168.10.163\측정팀\2.성적서\0 5.최종완료`
+- 수분량 저장 경로: `\\192.168.10.163\측정팀\2.성적서\0.수분량`
+- THC 저장 경로: `\\192.168.10.163\측정팀\2.성적서\0.THC`
+- 공용 오류 로그: `\\192.168.10.163\측정팀\10.검토\_logs\error_log.txt`
+
+---
+
+## 9. 시료번호 규칙
+
+시료번호는 여러 모듈에서 공통으로 사용하는 핵심 키다.
+
+형식:
+
+- `{매체}{YYMMDD}{팀번호}-{순번}`
+
+예시:
+
+- `A2604181-03`
+
+의미:
+
+- `A`: 대기
+- `26`: 2026년
+- `0418`: 4월 18일
+- `1`: 1팀
+- `03`: 세 번째 시료
+
+매체 구분:
+
+- `A`: 대기
+- `W`: 수질
+
+이 규칙은 다음 모듈들이 공통으로 사용한다.
+
+- `data_utils.py`
+- `file_utils.py`
+- `excel_utils.py`
+- `eco_input.py`
+- `eco_check.py`
+- `receipt.py`
+
+---
+
+## 10. 초보자가 자주 헷갈리는 점
+
+### 10-1. GUI가 떠도 내부는 콘솔형 질문 흐름을 쓴다
+
+`eco_input.py`와 `eco_check.py`는 원래 `input()` 기반 콘솔 구조다.
+GUI 파일은 이 입력 흐름을 가로채서 미리 준비한 답변 배열을 넣는 방식으로 동작한다.
+
+그래서 질문 순서가 바뀌면 GUI도 같이 수정해야 한다.
+
+### 10-2. 드래그앤드롭은 선택 기능이다
+
+`eco_input_gui.py`와 `report_check_gui.py`는 `tkinterdnd2`가 설치되어 있으면 드래그앤드롭을 지원한다.
+설치되지 않았거나 DLL 충돌이 있으면 기본 Tk 모드로 돌아간다.
+
+즉, 드래그앤드롭이 안 돼도 프로그램 자체가 망가진 것은 아니다.
+
+### 10-3. Excel이 숨어서 동작할 수 있다
+
+일부 작업은 `win32com`으로 Excel을 백그라운드에서 띄운다.
+PDF 생성, 표시값 복사, 백데이터 생성이 대표적이다.
+
+그래서 Excel 파일이 잠겨 있거나 다른 경고창이 떠 있으면 실패할 수 있다.
+
+### 10-4. RealGrid는 일반 HTML 표가 아니다
+
+측정인.kr의 표는 일반 테이블이 아니라 RealGrid라서 Selenium으로 단순 입력이 안 되는 구간이 있다.
+이 때문에 `realgrid_utils.py`에서 JavaScript API를 직접 호출한다.
+
+---
+
+## 11. 문제 생기면 먼저 볼 곳
+
+### 11-1. 공용 오류 로그
+
+- `\\192.168.10.163\측정팀\10.검토\_logs\error_log.txt`
+
+예외가 잡히면 `log_utils.py`를 통해 여기에 남는다.
+
+### 11-2. GUI 안의 로그 창
+
+대부분의 GUI는 화면 아래 또는 오른쪽에 로그 창이 있다.
+콘솔 출력이 로그 창으로 전달되므로, 실제 실행 순서를 보려면 이 로그를 보면 된다.
+
+### 11-3. 자주 발생하는 원인
+
+- Chrome 또는 ChromeDriver 버전 문제
+- Python 패키지 누락
+- NAS 경로 접근 실패
+- Excel 보안 경고 또는 잠금
+- 시트명 변경
+- 사이트 CSS 셀렉터 변경
+
+---
+
+## 12. 경로나 사이트가 바뀌었을 때 어디를 고쳐야 하는지
+
+### NAS 경로가 바뀌었을 때
+
+주로 아래 파일을 본다.
+
+- `eco_input.py`
+- `eco_check.py`
+- `backdata_utils.py`
+- `tab4_utils.py`
+- `receipt.py`
+- `dash.py`
+
+### 측정인.kr 사이트 구조가 바뀌었을 때
+
+주로 아래 파일을 본다.
+
+- `measin_constants.py`
+- `eco_input.py`
+- `eco_check.py`
+- `tab4_utils.py`
+- `selenium_utils.py`
+
+### 엑셀 시트명이 바뀌었을 때
+
+주로 아래 파일을 본다.
+
+- `excel_utils.py`
+- `eco_input.py`
+- `backdata_utils.py`
+- `tab4_pdf_final_gui.py`
+
+---
+
+## 13. 문서별 역할
+
+이 폴더의 주요 문서는 역할이 다르다.
+
+| 문서 | 용도 |
+|------|------|
+| `readme.md` | 처음 사용하는 사람을 위한 전체 안내 |
+| `파일별_설명.md` | 개발자/유지보수 담당자를 위한 파일별 상세 설명 |
+| `모듈화_분석.md` | 리팩터링 및 모듈화 작업 기록 |
+| `버전노트.txt` | 버전별 변경 이력 |
+
+---
+
+## 14. 빠르게 기억해야 할 핵심만 정리
+
+- 처음 PC면 `0.처음사용시`의 통합 설치부터 실행
+- 실행은 `.bat` 파일을 더블클릭
+- 자동입력은 `1.측정인 자동입력 V2.7.bat`
+- 성적서 검토는 `5.성적서 검토 V2.5.bat`
+- 경로/사이트/시트명 변경은 한 파일만 고치면 끝나지 않는 경우가 많음
+- 에러는 먼저 공용 로그와 GUI 로그창 확인
+- 백데이터는 측정 종료 전이면 일부러 생성되지 않음

@@ -46,6 +46,7 @@ from datetime import datetime, timedelta
 
 import win32com.client as win32
 import win32clipboard
+from openpyxl import load_workbook
 
 # ============================================================
 # 공통 유틸 모듈 (모듈화)
@@ -60,6 +61,8 @@ from excel_utils import find_sheet_by_candidates
 from excel_com_utils import get_excel_app
 
 SRC_DIR = r"\\192.168.10.163\측정팀\2.성적서\0 2.검토중"
+DAEJANG_ROOT = r"\\192.168.10.163\측정팀\0.시료접수발송대장"
+_DAEJANG_AIR_CACHE = {}
 
 
 # ============================================================
@@ -377,6 +380,7 @@ VOC_GROUP_A = {
 }
 VOC_GROUP_B = {"이황화메틸"}
 VOC_GROUP_C = {"에틸렌옥사이드","프로필렌옥사이드"}
+GAS_AUTO_ITEMS = {"황산화물", "질소산화물", "일산화탄소"}
 
 HEAVY_METALS = {
     "비소화합물","크로뮴화합물","납화합물","니켈화합물","베릴륨화합물",
@@ -435,6 +439,47 @@ def check_group_time_alignment(rows, group_id, group_label):
                 f"{base.get('item')}({fmt_range(bs,be)}) vs {d.get('item')}({fmt_range(s,e)})"
             )
     return issues
+
+
+def check_named_rows_time_alignment(rows, item_names, group_label):
+    items = [d for d in rows if str(d.get("item") or "").strip() in set(item_names or [])]
+    if len(items) <= 1:
+        return []
+
+    base = items[0]
+    bs, be = base.get("start_dt"), base.get("end_dt")
+    if not bs or not be:
+        return [f"[채취시간불일치] {group_label}: 기준시간 비어있음"]
+
+    issues = []
+    for d in items[1:]:
+        s, e = d.get("start_dt"), d.get("end_dt")
+        if not s or not e:
+            issues.append(f"[채취시간불일치] {group_label}: {d.get('item')} 시간 비어있음")
+            continue
+        if (strip_seconds(s), strip_seconds(e)) != (strip_seconds(bs), strip_seconds(be)):
+            issues.append(
+                f"[채취시간불일치] {group_label}: "
+                f"{base.get('item')}({fmt_range(bs,be)}) vs {d.get('item')}({fmt_range(s,e)})"
+            )
+    return issues
+
+
+def build_single_event_from_named_rows(rows, item_names, label):
+    items = [d for d in rows if str(d.get("item") or "").strip() in set(item_names or [])]
+    if not items:
+        return None
+
+    base = items[0]
+    s, e = base.get("start_dt"), base.get("end_dt")
+    if not s or not e:
+        return None
+    uniq_items = []
+    for d in items:
+        item = str(d.get("item") or "").strip()
+        if item and item not in uniq_items:
+            uniq_items.append(item)
+    return build_named_event(label, s, e, uniq_items)
 
 
 def build_sampling_events(rows):
@@ -531,6 +576,42 @@ def check_overlap_events(events, allow, title):
             vio_start = None
             vio_snapshot = []
 
+    return issues
+
+
+def build_named_event(label, start_dt, end_dt, items=None):
+    if not start_dt or not end_dt:
+        return None
+    s = strip_seconds(start_dt)
+    e = strip_seconds(end_dt)
+    if e < s:
+        return None
+    return (s, e, label, list(items or [label]))
+
+
+def check_particle_vs_prereq_events(particle_events, prereq_events):
+    """
+    수분량자동측정기/가스자동측정기는 입자상보다 먼저 끝나야 한다.
+    - 서로 겹치면 안 됨
+    - 끝==다음 시작도 허용하지 않음
+    """
+    issues = []
+    for ps, pe, plabel, pitems in particle_events:
+        for rs, re, rlabel, ritems in prereq_events:
+            if not ps or not pe or not rs or not re:
+                continue
+
+            particle_desc = ", ".join(dict.fromkeys([str(x).strip() for x in pitems if str(x).strip()])) or str(plabel)
+            prereq_desc = ", ".join(dict.fromkeys([str(x).strip() for x in ritems if str(x).strip()])) or str(rlabel)
+
+            if ps <= re and pe >= rs:
+                issues.append(
+                    f"[시간겹침] {rlabel}({fmt_range(rs, re)}) 와 입자상({particle_desc}, {fmt_range(ps, pe)})은 겹치면 안됨"
+                )
+            elif ps <= re:
+                issues.append(
+                    f"[선후오류] 입자상({particle_desc}, {fmt_range(ps, pe)})은 {rlabel}({fmt_range(rs, re)}) 후에 시작해야 함"
+                )
     return issues
 
 
@@ -801,6 +882,104 @@ def set_row_height_cap(ws, row_idx, cap=80):
         pass
 
 
+def parse_sample_ymd(sample: str):
+    m = re.match(r"^[A-Za-z](\d{2})(\d{2})(\d{2})\d-\d{2,3}$", str(sample or "").strip())
+    if not m:
+        return None, None, None
+    yy, mm, dd = m.groups()
+    return 2000 + int(yy), int(mm), int(dd)
+
+
+def load_air_daejang_sheet_data(sample: str):
+    """
+    시료번호 기준으로 발송대장(대기) 월 파일의 일자 시트를 읽어
+    가스미터/VOC 전후 값을 반환한다.
+    """
+    yyyy, month, day = parse_sample_ymd(sample)
+    if not yyyy:
+        return None
+
+    path = os.path.join(DAEJANG_ROOT, f"{yyyy}년", f"시료접수발송대장(대기)-{month}월.xlsm")
+    sheet_name = f"{day}일"
+    cache_key = (path, sheet_name)
+
+    if cache_key not in _DAEJANG_AIR_CACHE:
+        if not os.path.exists(path):
+            _DAEJANG_AIR_CACHE[cache_key] = None
+            return None
+
+        try:
+            wb = load_workbook(path, data_only=True, read_only=True)
+        except Exception:
+            _DAEJANG_AIR_CACHE[cache_key] = None
+            return None
+
+        try:
+            if sheet_name not in wb.sheetnames:
+                _DAEJANG_AIR_CACHE[cache_key] = None
+                return None
+
+            ws = wb[sheet_name]
+
+            header_map = {}
+            for col in range(1, 40):
+                hv = ws.cell(row=2, column=col).value
+                if hv is None:
+                    continue
+                header_map[str(hv).strip()] = col
+
+            need_headers = {
+                "가스미터 전": None,
+                "가스미터 후": None,
+                "voc 전": None,
+                "voc 후": None,
+            }
+            for key in list(need_headers.keys()):
+                need_headers[key] = header_map.get(key)
+
+            if any(v is None for v in need_headers.values()):
+                _DAEJANG_AIR_CACHE[cache_key] = None
+                return None
+
+            day_map = {}
+            for row in range(3, ws.max_row + 1):
+                sample_cell = ws.cell(row=row, column=1).value
+                sample_text = "" if sample_cell is None else str(sample_cell).strip().upper()
+                if not sample_text:
+                    continue
+                day_map[sample_text] = {
+                    "가스미터 전": ws.cell(row=row, column=need_headers["가스미터 전"]).value,
+                    "가스미터 후": ws.cell(row=row, column=need_headers["가스미터 후"]).value,
+                    "voc 전": ws.cell(row=row, column=need_headers["voc 전"]).value,
+                    "voc 후": ws.cell(row=row, column=need_headers["voc 후"]).value,
+                }
+
+            _DAEJANG_AIR_CACHE[cache_key] = day_map
+        finally:
+            wb.close()
+
+    cached = _DAEJANG_AIR_CACHE.get(cache_key)
+    if not cached:
+        return None
+    return cached.get(str(sample or "").strip().upper())
+
+
+def fill_sample2_meter_values(ws2, sample: str):
+    data = load_air_daejang_sheet_data(sample)
+
+    ws2.Range("F4").Value = "가스미터"
+    ws2.Range("H4").Value = "VOC"
+
+    if not data:
+        log(f"  ⚠ 발송대장 값 못 찾음: {sample}")
+        return
+
+    ws2.Range("F5").Value = data.get("가스미터 전")
+    ws2.Range("F6").Value = data.get("가스미터 후")
+    ws2.Range("H5").Value = data.get("voc 전")
+    ws2.Range("H6").Value = data.get("voc 후")
+
+
 # ============================================================
 # sample-2 마지막행 계산 유틸(유지)
 # ============================================================
@@ -1030,6 +1209,8 @@ def main(sample_list, user_name):
                             if extract_ws:
                                 copy_range_with_hidden(extract_ws, "B5:AG51", ws2, "A8")
                                 bottom_row = update_bottom(bottom_row, 8, row_count_of_addr(extract_ws, "B5:AG51"))
+
+                            fill_sample2_meter_values(ws2, sample)
                             ws2.Columns("A:AF").AutoFit()
                             log(f" ▶ sample-2 완료")
                             try:
@@ -1152,6 +1333,16 @@ def main(sample_list, user_name):
                     # 전체측정시간(E5~F5) + 엄격 범위 체크(초 제거, HH:MM)
                     overall_start_dt = to_datetime_if_possible(input2_ws.Range("E5").Value) if input2_ws else None
                     overall_end_dt = to_datetime_if_possible(input2_ws.Range("F5").Value) if input2_ws else None
+                    moisture_start_dt = None
+                    moisture_end_dt = None
+                    if input2_ws and str(b18_value or "").strip() == "사용":
+                        moisture_raw = to_datetime_if_possible(input2_ws.Range("B23").Value)
+                        if moisture_raw is not None:
+                            moisture_start_dt = align_to_date(overall_start_dt or moisture_raw, moisture_raw)
+                            moisture_end_dt = strip_seconds(moisture_start_dt + timedelta(minutes=5))
+
+                    gas_auto_event = None
+
                     total_window_issues = check_total_window(
                         all_rows=(analysis_rows + fugitive_rows),
                         overall_start_dt=overall_start_dt,
@@ -1202,6 +1393,7 @@ def main(sample_list, user_name):
                     time_issues += check_group_time_alignment(analysis_rows, "VOC-C", "VOC(EO/PO)")
                     time_issues += check_group_time_alignment(analysis_rows, "PM-METALS", "중금속(8종)")
                     time_issues += check_group_time_alignment(analysis_rows, "GAS2-FA", "폼알데하이드/아세트알데하이드(1회채취)")
+                    time_issues += check_named_rows_time_alignment(analysis_rows, GAS_AUTO_ITEMS, "가스자동측정기(황산화물/질소산화물/일산화탄소)")
                     time_issues += total_window_issues
 
                     gas_rows = [d for d in analysis_rows if d.get("cat") in ("가스상2", "VOC")]
@@ -1211,6 +1403,20 @@ def main(sample_list, user_name):
                     particle_rows_only = [d for d in analysis_rows if d.get("cat") == "입자상"]
                     particle_events = build_sampling_events(particle_rows_only)
                     time_issues += check_overlap_events(particle_events, allow=1, title="입자상(1대)")
+
+                    prereq_events = []
+                    moisture_event = build_named_event(
+                        "수분량자동측정기", moisture_start_dt, moisture_end_dt, ["입력!B23 + 5분"]
+                    )
+                    gas_auto_event = build_single_event_from_named_rows(
+                        analysis_rows, GAS_AUTO_ITEMS, "가스자동측정기"
+                    )
+                    if moisture_event:
+                        prereq_events.append(moisture_event)
+                    if gas_auto_event:
+                        prereq_events.append(gas_auto_event)
+
+                    time_issues += check_particle_vs_prereq_events(particle_events, prereq_events)
 
                     # (THC 검증)
                     thc_issues = []
@@ -1333,7 +1539,9 @@ def main(sample_list, user_name):
                             f"THC측정기={('있음' if has_thc_meter else '없음')}",
                             f"비산먼지장비={('있음' if has_fugitive_dust else '없음')}",
                             f"수분량자동={('있음' if has_moisture_auto else '없음')}",
-                            f"수분자동입력={b18_value}"
+                            f"수분자동입력={b18_value}",
+                            f"수분량자동시간={fmt_range(moisture_start_dt, moisture_end_dt) if moisture_start_dt and moisture_end_dt else '(없음)'}",
+                            f"가스자동시간={fmt_range(gas_auto_event[0], gas_auto_event[1]) if gas_auto_event else '(없음)'}"
                         ]
                         for c_idx, val in enumerate(equipment_info, start=1):
                             ws3.Cells(rr, c_idx).Value = val
@@ -1356,7 +1564,7 @@ def main(sample_list, user_name):
                             tag = parts[0] + "]" if len(parts) > 1 else "[시간오류]"
                             rest = parts[1] if len(parts) > 1 else msg
                             
-                            is_err = ("장비초과" in msg) or ("채취시간불일치" in msg) or ("전체시간범위이탈" in msg) or ("시간역전" in msg) or ("[오류]" in msg)
+                            is_err = ("장비초과" in msg) or ("채취시간불일치" in msg) or ("전체시간범위이탈" in msg) or ("시간역전" in msg) or ("시간겹침" in msg) or ("선후오류" in msg) or ("[오류]" in msg)
                             color = 3 if is_err else -4142 # 3=빨강, -4142=투명
                             
                             ws3.Cells(rr, 1).Value = tag
