@@ -176,7 +176,7 @@ class EcoInputGUI:
         self.air_job_frame = ttk.LabelFrame(job_mode_frame, text="작업 선택", padding=6)
         self.air_job_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         ttk.Radiobutton(self.air_job_frame,
-                        text="1) 웹 자동입력",
+                        text="1) 측정인 자동입력",
                         value="1", variable=self.job_var).grid(row=0, column=0, sticky="w", pady=1)
         ttk.Radiobutton(self.air_job_frame,
                         text="2) 백데이터만",
