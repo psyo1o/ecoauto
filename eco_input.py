@@ -467,6 +467,23 @@ def fill_tab2(d, data, is_dust):
     print("✅ 탭2 입력 완료")
 
 
+def ensure_gas_flow_checkbox_checked(driver, selector="#meas_gas_fvol_yn"):
+    try:
+        checkbox = WebDriverWait(driver, 5).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+        )
+        is_checked = driver.execute_script("return !!arguments[0].checked;", checkbox)
+        if not is_checked:
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", checkbox)
+            driver.execute_script("arguments[0].click();", checkbox)
+            time.sleep(0.2)
+            print("✅ 배출가스 유량 체크 완료")
+        else:
+            print("▶ 배출가스 유량 이미 체크됨")
+    except Exception as e:
+        print("⚠ 배출가스 유량 체크 실패:", e)
+
+
 
 # ------------------------------------------------------------
 # 🔽🔽 여기부터 새 기능 추가 (기존 코드 절대 수정 없음, 아래만 수정)
@@ -1599,6 +1616,7 @@ def _main_air():
                     fill_facility_rows(driver, parse_facility_from_excel(path))
                 else:
                     print("▶ 비산먼지 → 배출시설 스킵")
+                    ensure_gas_flow_checkbox_checked(driver)
 
                 write_sampler_comment(driver)
 
