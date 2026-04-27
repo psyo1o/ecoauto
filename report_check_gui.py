@@ -27,6 +27,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+DEFAULT_BROWSE_DIR = r"\\192.168.10.163\측정팀\2.성적서\0 2.검토중"
+
 APP_VERSION = "FILELIST_v3_SAFE_DND"
 
 # ------------------------------
@@ -305,6 +307,7 @@ class ReportCheckFileListGUI:
     def _add_files_dialog(self):
         paths = filedialog.askopenfilenames(
             title="성적서 엑셀 파일 선택",
+            initialdir=DEFAULT_BROWSE_DIR,
             filetypes=[("Excel files", "*.xls;*.xlsx;*.xlsm"), ("All files", "*.*")]
         )
         if paths:
