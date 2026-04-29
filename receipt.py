@@ -295,6 +295,18 @@ def format_dt_or_blank(x: dt.datetime | None):
     return "" if x is None else x.strftime("%Y-%m-%d %H:%M")
 
 
+def is_valid_sample_no(sn: str) -> bool:
+    """A열 값이 시료번호 형식인지 엄격히 판정."""
+    s = (sn or "").strip().upper()
+    if not re.match(r"^[A-Z]\d{7}-\d{2,3}$", s):
+        return False
+    if parse_sn_date(s) is None:
+        return False
+    if parse_sn_team(s) is None:
+        return False
+    return True
+
+
 # ✅ 시료번호 추출/비교 유틸
 def report_sn_from_sheet_b1(sh_in) -> str:
     """성적서 [입력] 시트 B1에서 시료번호 추출"""
@@ -531,6 +543,8 @@ def process_daejang(daejang_path: str,
                 continue
 
             sn_dj = sn.strip().upper()
+            if not is_valid_sample_no(sn_dj):
+                continue
 
             sn_date = parse_sn_date(sn)
             if sn_date is not None:
