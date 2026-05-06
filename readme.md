@@ -97,7 +97,7 @@ Windows 전용인 이유는 다음 기능을 사용하기 때문이다.
 | `3.발송대장 검토 V1.5.bat` | `receipt.py` | 발송대장 기준 상태 점검 |
 | `4.종합 검토 V1.5.bat` | `dash.py` | 여러 검토 결과를 종합한 대시보드 생성 |
 | `5.성적서 검토 V2.6.bat` | `report_check_gui.py` | 성적서 파일 자체 무결성 검사 |
-| `6.차량운행일지 검토 V1.6.bat` | `Vehicle_operation_log.py` | 차량운행일지/근무시간 검토 |
+| `6.차량운행일지 검토 V1.7.bat` | `Vehicle_operation_log.py` | 차량운행일지/근무시간 검토 |
 | `7.PDF 생성 V1.1.bat` | `tab4_pdf_final_gui.py` | 탭4 PDF 최종본 수동 생성 |
 
 배치 파일은 공통적으로 다음 방식으로 동작한다.
