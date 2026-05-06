@@ -128,11 +128,28 @@ def parse_daejang(path):
 
             start_t, end_t = parse_time_range_text(t_raw)
             company = normalize_company(comp_raw)
+            end_day_offset = 0
+
+            # "16:00~26일 01:00" 같이 종료 구간에 'n일' 표기가 있으면
+            # 시트 일자 대비 종료일 오프셋(+1일 등)을 계산해 둔다.
+            if isinstance(t_raw, str) and "~" in t_raw:
+                right = t_raw.split("~", 1)[1].strip()
+                m_right_day = re.search(r"(\d{1,2})\s*일", right)
+                m_sheet_day = re.match(r"^(\d{1,2})일$", sheet)
+                if m_right_day and m_sheet_day:
+                    right_day = int(m_right_day.group(1))
+                    sheet_day = int(m_sheet_day.group(1))
+                    if right_day > sheet_day:
+                        end_day_offset = right_day - sheet_day
+                    elif right_day < sheet_day:
+                        # 월말/월초 넘어가는 표기는 최소 익일로 처리
+                        end_day_offset = 1
 
             results.append({
                 "sn": sn,
                 "start": start_t,
                 "end": end_t,
+                "end_day_offset": end_day_offset,
                 "company": company,
                 "sheet": sheet,
                 "row": r + 1
@@ -192,20 +209,35 @@ def parse_drive_log(path):
         raw_end       = df.iloc[r, 6]
         raw_engineer  = df.iloc[r, 11]
 
+        end_day = None
+
         # 날짜 처리
         if isinstance(raw_date, dt.datetime):
             day = raw_date.date()
+            end_day = day
         elif isinstance(raw_date, dt.date):
             day = raw_date
+            end_day = day
         else:
-            day = parse_ymd_date(raw_date)
+            raw_date_text = str(raw_date).strip()
+            if "~" in raw_date_text:
+                start_text, end_text = raw_date_text.split("~", 1)
+                day = parse_ymd_date(start_text.strip())
+                end_day = parse_ymd_date(end_text.strip())
+            else:
+                day = parse_ymd_date(raw_date_text)
+
             if day is None:
                 continue
+
+            if end_day is None:
+                end_day = day
 
         engineers = normalize_names_cell(raw_engineer)
 
         results.append({
             "date": day,
+            "end_date": end_day,
             "plate": normalize_plate(raw_plate),
             "company": normalize_company(raw_company),
             "start": parse_time(raw_start),
@@ -302,6 +334,25 @@ def find_drive_for_date(drive_list, sn_date, plate):
     """같은 날짜 + 같은 차량번호"""
     return [d for d in drive_list if d["date"] == sn_date and d["plate"] == plate]
 
+
+def _build_interval(base_day, start_t, end_t, end_day=None):
+    """
+    날짜 + 시간으로 구간(datetime) 생성.
+    - end_day 지정 시 종료일을 그대로 사용
+    - end_day 미지정 상태에서 종료시각 < 시작시각이면 익일 종료로 간주
+    """
+    if not base_day or not start_t or not end_t:
+        return None, None
+
+    start_dt = dt.datetime.combine(base_day, start_t)
+    actual_end_day = end_day if end_day else base_day
+    end_dt = dt.datetime.combine(actual_end_day, end_t)
+
+    if end_day is None and end_dt < start_dt:
+        end_dt += dt.timedelta(days=1)
+
+    return start_dt, end_dt
+
 ###############################################################
 # 7) 대장 / 운행일지 / 기술인력 비교 통합 로직 (기술인력 중복 포함)
 ###############################################################
@@ -344,6 +395,7 @@ def compare_all(dae, drive, eng):
         comp = d["company"]
         st = d["start"]
         ed = d["end"]
+        dae_end_day_offset = d.get("end_day_offset", 0)
 
         sn_date, sn_team, sn_idx = parse_sn(sn)
 
@@ -402,7 +454,15 @@ def compare_all(dae, drive, eng):
         matched = False
         for log in drv_candidates:
             if st and ed and log["start"] and log["end"]:
-                if log["start"] <= st and ed <= log["end"]:
+                dae_end_day = sn_date + dt.timedelta(days=dae_end_day_offset) if dae_end_day_offset > 0 else None
+                dae_start_dt, dae_end_dt = _build_interval(sn_date, st, ed, dae_end_day)
+                log_start_dt, log_end_dt = _build_interval(
+                    log.get("date"),
+                    log.get("start"),
+                    log.get("end"),
+                    log.get("end_date")
+                )
+                if dae_start_dt and dae_end_dt and log_start_dt and log_end_dt and log_start_dt <= dae_start_dt and dae_end_dt <= log_end_dt:
                     matched = True
                     row_status["운행일지_일치여부"] = "OK"
                     row_status["운행일지_출발시간"] = log["start"]
