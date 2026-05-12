@@ -616,11 +616,39 @@ def check_particle_vs_prereq_events(particle_events, prereq_events):
 
 
 # ============================================================
+# 입력(분석값) 1행 헤더 → 열번호 맵
+# ============================================================
+def find_analysis_header_col(ws_analysis, names):
+    """
+    입력(분석값) 시트 1행에서 names 중 하나와 일치하는 헤더의 열 번호 반환.
+    못 찾으면 None.
+    """
+    if ws_analysis is None:
+        return None
+    name_set = set(n.strip() for n in names if n)
+    try:
+        for col in range(1, 60):
+            v = ws_analysis.Cells(1, col).Value
+            if v is None:
+                continue
+            t = str(v).strip()
+            if t in name_set:
+                return col
+    except:
+        pass
+    return None
+
+
+# ============================================================
 # 입력(분석값) 읽기 (숨김 PASS)
 # ============================================================
 def read_analysis_items(ws_analysis):
     if ws_analysis is None:
         return []
+
+    # ✅ 1행 헤더에서 시료채취량 열 위치 찾기 (Sm³/L 단위 무관)
+    vol_col = find_analysis_header_col(ws_analysis, ["시료채취량", "시료 채취량"])
+
     rows = []
     for r in range(2, 65):
         try:
@@ -637,10 +665,13 @@ def read_analysis_items(ws_analysis):
             continue
 
         item_s = str(item).strip()
+        c_val = ws_analysis.Cells(r, 3).Value   # C  (먼지 무게 계산용)
+        d_val = ws_analysis.Cells(r, 4).Value   # D  (먼지 무게 계산용)
         conc = ws_analysis.Cells(r, 5).Value    # E
         limitv = ws_analysis.Cells(r, 8).Value  # H
         st_raw = ws_analysis.Cells(r, 9).Value  # I
         ed_raw = ws_analysis.Cells(r, 11).Value # K
+        vol_raw = ws_analysis.Cells(r, vol_col).Value if vol_col else None
 
         rows.append({
             "src": "입력(분석값)",
@@ -652,8 +683,94 @@ def read_analysis_items(ws_analysis):
             "start_dt": to_datetime_if_possible(st_raw),
             "end_dt": to_datetime_if_possible(ed_raw),
             "group_id": None,
+            "c_val": to_float_if_pure_number(c_val),
+            "d_val": to_float_if_pure_number(d_val),
+            "vol": to_float_if_pure_number(vol_raw),
         })
     return rows
+
+# ============================================================
+# ✅ 입자상 채취기준 검사
+#   - 먼지       : 채취시간 ≥ 40분  OR  시료채취량 ≥ 0.4  OR  무게(C-D) ≥ 0.005  → 정상
+#   - 중금속(8종): 시료채취량 ≥ 1                                                → 정상
+#   - 벤조(a)피렌: 시료채취량 ≥ 3                                                → 정상
+#   위 기준에 안맞으면 [채취기준미달] 으로 보고
+# ============================================================
+def check_particle_sampling_criteria(rows):
+    issues = []
+
+    def _fmt_num(v, digits=4):
+        if v is None:
+            return "(없음)"
+        try:
+            return f"{float(v):.{digits}f}".rstrip("0").rstrip(".") or "0"
+        except:
+            return str(v)
+
+    for d in rows:
+        item = (d.get("item") or "").strip()
+        if not item:
+            continue
+        if d.get("cat") != "입자상":
+            continue
+
+        gid = d.get("group_id")
+        vol = d.get("vol")
+
+        # 채취시간(분) 계산: 측정 종료 - 측정 시작
+        s = d.get("start_dt")
+        e = d.get("end_dt")
+        minutes = None
+        if s and e:
+            try:
+                minutes = (e - s).total_seconds() / 60.0
+            except:
+                minutes = None
+
+        # 무게 = C - D
+        c_val = d.get("c_val")
+        d_val = d.get("d_val")
+        weight = None
+        if c_val is not None and d_val is not None:
+            try:
+                weight = float(c_val) - float(d_val)
+            except:
+                weight = None
+
+        # ── 먼지 ───────────────────────────────────────────
+        if gid == "PM-DUST" or "먼지" in item:
+            ok_time = (minutes is not None and minutes >= 40)
+            ok_vol = (vol is not None and vol >= 0.4)
+            ok_weight = (weight is not None and weight >= 0.005)
+
+            if not (ok_time or ok_vol or ok_weight):
+                m_str = f"{minutes:.0f}분" if minutes is not None else "(없음)"
+                v_str = _fmt_num(vol)
+                w_str = _fmt_num(weight, digits=5)
+                issues.append(
+                    f"[채취기준미달] 먼지: 채취시간={m_str}(≥40분), "
+                    f"시료채취량={v_str}(≥0.4), 무게={w_str}(≥0.005) "
+                    f"→ 셋 중 하나도 충족 못함"
+                )
+
+        # ── 중금속(8종) ────────────────────────────────────
+        elif gid == "PM-METALS" or item in HEAVY_METALS:
+            if vol is None or vol < 1:
+                v_str = _fmt_num(vol)
+                issues.append(
+                    f"[채취기준미달] 중금속({item}): 시료채취량={v_str} (≥1 필요)"
+                )
+
+        # ── 벤조(a)피렌 ────────────────────────────────────
+        elif gid == "PM-BaP" or (("벤조" in item) and ("피렌" in item)):
+            if vol is None or vol < 3:
+                v_str = _fmt_num(vol)
+                issues.append(
+                    f"[채취기준미달] 벤조(a)피렌: 시료채취량={v_str} (≥3 필요)"
+                )
+
+    return issues
+
 
 # ============================================================
 # 농도 vs 기준 체크(중복 제거)
@@ -1418,6 +1535,9 @@ def main(sample_list, user_name):
 
                     time_issues += check_particle_vs_prereq_events(particle_events, prereq_events)
 
+                    # ✅ 입자상 채취기준 검사 (먼지 / 중금속 / 벤조(a)피렌)
+                    criteria_issues = check_particle_sampling_criteria(analysis_rows)
+
                     # (THC 검증)
                     thc_issues = []
                     expected = ""
@@ -1433,7 +1553,7 @@ def main(sample_list, user_name):
                         bool(analysis_conc_checks) or
                         (is_fugitive and bool(fugitive_conc_checks)) or
                         bool(time_issues) or bool(device_issues) or
-                        bool(thc_issues)
+                        bool(thc_issues) or bool(criteria_issues)
                     )
 
                     if has_any_issue:
@@ -1576,6 +1696,21 @@ def main(sample_list, user_name):
                                 ws3.Cells(rr, 2 + i).Value = text_part.strip("- ") # 앞에 붙은 '-' 기호 제거
                                 ws3.Cells(rr, 2 + i).Interior.ColorIndex = color
                             rr += 1
+
+                        # ✅ 입자상 채취기준 검토 출력
+                        if criteria_issues:
+                            rr += 1
+                            ws3.Range(f"A{rr}").Value = "입자상 채취기준 검토(먼지/중금속/벤조(a)피렌)"
+                            rr += 1
+                            for msg in criteria_issues:
+                                parts = msg.split("] ", 1)
+                                tag = parts[0] + "]" if len(parts) > 1 else "[채취기준미달]"
+                                desc = parts[1] if len(parts) > 1 else msg
+
+                                ws3.Cells(rr, 1).Value = tag
+                                ws3.Cells(rr, 2).Value = desc
+                                ws3.Range(ws3.Cells(rr, 1), ws3.Cells(rr, 2)).Interior.ColorIndex = 3
+                                rr += 1
 
                         # THC 검증 출력
                         if has_thc_item:
