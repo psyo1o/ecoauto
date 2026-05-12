@@ -53,6 +53,7 @@ from measin_utils import (
     login, search_date, wait_grid_loaded,
     open_sample_detail as _open_sample_detail,
     go_back_to_list as _go_back_to_list,
+    is_field_list_ready as _is_field_list_ready,
     collect_samples_from_files,
     LOGIN_URL, FIELD_URL, NAS_BASE, NAS_DIRS
 )
@@ -291,6 +292,54 @@ def back_to_list(d, btn_selector="#btnMsFieldDocCancel"):
     result = _go_back_to_list(d, btn_selectors=selectors)
     accept_any_alert(d, timeout=2)
     return result
+
+
+def _is_tab2_site_completed(save_ok, do_pdf_upload, did_pdf, pdf_deleted):
+    """탭2 저장 성공 + (PDF 업로드 시) PDF 삭제까지 끝났으면 True."""
+    if not save_ok:
+        return False
+    if do_pdf_upload:
+        return bool(did_pdf and pdf_deleted)
+    return True
+
+
+def recover_site_session(driver, login_id, login_pw, date_str=None, field_url=FIELD_URL):
+    """세션 만료 시 확인창 처리 후 로그인·목록 검색까지 복구."""
+    print("▶ 로그인 세션 만료 → 확인창 처리 후 재로그인")
+    for label in ("세션복구1", "세션복구2", "세션복구3"):
+        _accept_all_alerts(driver, total_wait=4.0, poll=0.2, max_accept=12, label=label)
+        close_popup(driver)
+        time.sleep(0.3)
+
+    login(driver, login_id, login_pw, field_url=field_url)
+    if date_str:
+        search_date(driver, date_str, date_str)
+
+
+def open_detail_with_session_recovery(
+    driver,
+    sample_no,
+    login_id,
+    login_pw,
+    date_str=None,
+    field_url=FIELD_URL,
+    max_recover=5,
+):
+    """상세 진입 실패 시 목록 검색창이 없으면 재로그인 후 같은 시료부터 재시도."""
+    recover_count = 0
+    while True:
+        if open_detail_by_sample(driver, sample_no):
+            return True
+
+        if _is_field_list_ready(driver):
+            return False
+
+        if recover_count >= max_recover:
+            print("❌ 세션 복구 반복 한도 초과 → 상세 진입 중단")
+            return False
+
+        recover_count += 1
+        recover_site_session(driver, login_id, login_pw, date_str=date_str, field_url=field_url)
 
 # =====================================================================
 # 탭1 입력
@@ -1438,7 +1487,9 @@ def _main_water():
     driver = init_driver()
     login(driver, login_id, login_pw, field_url=FIELD_URL_WATER)
 
-    for item in items:
+    idx = 0
+    while idx < len(items):
+        item = items[idx]
         sample = item["sample"]
         path   = item["path"]
 
@@ -1446,8 +1497,11 @@ def _main_water():
         print(f"▶ 수질 시료: {sample}")
         print(f"{'='*51}")
 
-        if not open_detail_by_sample(driver, sample):
+        if not open_detail_with_session_recovery(
+            driver, sample, login_id, login_pw, field_url=FIELD_URL_WATER
+        ):
             print("❌ 상세페이지 진입 실패 → 다음 시료로")
+            idx += 1
             continue
 
         # 탭4 클릭 + 로딩 대기
@@ -1475,6 +1529,7 @@ def _main_water():
             cleanup_tmp_pdfs(PDF_TMP_DIR, sample)
 
         back_to_list(driver)
+        idx += 1
 
     print("\n=== 수질 처리 완료 ===")
     try:
@@ -1575,7 +1630,10 @@ def _main_air():
         else:
             print("▶ 백데이터만 모드 → 날짜검색 스킵")
 
-        for item in day_samples:
+        tab2_done_samples = set()
+        idx = 0
+        while idx < len(day_samples):
+            item = day_samples[idx]
             sample  = item["sample"]
             path    = item["path"]
             is_dust = item["dust"]
@@ -1592,22 +1650,37 @@ def _main_air():
                 print("▶ 비산먼지 → 백데이터 스킵")
 
             if job != "1":
+                idx += 1
                 continue
 
-            if not open_detail_by_sample(driver, sample):
-                print("❌ 상세페이지 실패 → 다음 시료로"); continue
+            site_tab2_done = sample in tab2_done_samples
+            if site_tab2_done and not do_tab4:
+                print(f"▶ {sample} 탭2 저장/PDF 완료 → 사이트 입력 스킵")
+                idx += 1
+                continue
+
+            need_detail = any([do_tab1, do_tab2, do_tab4])
+            if need_detail:
+                if site_tab2_done:
+                    print(f"▶ {sample} 탭2 저장/PDF 완료 → 탭4만 진행")
+                if not open_detail_with_session_recovery(
+                    driver, sample, login_id, login_pw, date_str=date_str
+                ):
+                    print("❌ 상세페이지 실패 → 다음 시료로")
+                    idx += 1
+                    continue
 
             excel = parse_measuring_record(path, sample)
 
             # 탭1
-            if do_tab1:
+            if do_tab1 and not site_tab2_done:
                 safe_click(driver, "#ui-id-1")
                 fill_tab1(driver, excel, is_dust)
-            else:
+            elif not do_tab1:
                 print("▶ 탭1 스킵")
 
             # 탭2
-            if do_tab2:
+            if do_tab2 and not site_tab2_done:
                 safe_click(driver, "#ui-id-2")
                 fill_tab2(driver, excel, is_dust)
                 set_date_js(driver, SEL_DATE, date_str)
@@ -1647,12 +1720,21 @@ def _main_air():
                 print(f"▶ 탭2 {'✅입력완료' if use_final_save else '⚠임시저장'}")
                 ok = save_tab2(driver, use_final_save=use_final_save)
 
+                pdf_deleted = False
                 if ok and did_pdf and pdf_path and os.path.isfile(pdf_path):
                     try:
                         os.remove(pdf_path)
+                        pdf_deleted = True
                         print(f"🗑 PDF 삭제: {pdf_path}")
                     except Exception as e:
                         print(f"⚠ PDF 삭제 실패: {e}")
+
+                if _is_tab2_site_completed(ok, do_pdf_upload, did_pdf, pdf_deleted):
+                    tab2_done_samples.add(sample)
+                elif not ok:
+                    print("⚠ 탭2 저장 실패 → 재시도 대상")
+            elif do_tab2 and site_tab2_done:
+                print("▶ 탭2 스킵(이미 처리됨)")
             else:
                 print("▶ 탭2 스킵")
 
@@ -1686,6 +1768,7 @@ def _main_air():
                     cleanup_tmp_pdfs(PDF_TMP_DIR, sample)
 
             back_to_list(driver)
+            idx += 1
 
     print("\n=== 대기 처리 완료 ===")
     try:

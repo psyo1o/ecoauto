@@ -96,6 +96,15 @@ def wait_grid_loaded(driver, timeout: float = 10, warn_msg: str = "⚠ RealGrid 
         print(warn_msg)
 
 
+def is_field_list_ready(driver, search_box: str = "#search_meas_mgmt_no") -> bool:
+    """현장측정분석 목록 화면(시료번호 검색창)이 보이면 True."""
+    try:
+        driver.find_element(By.CSS_SELECTOR, search_box)
+        return True
+    except Exception:
+        return False
+
+
 def get_samples_current_page(driver, prefix: str = "A") -> list:
     """
     현재 페이지 RealGrid에서 시료번호(prefix + 숫자-숫자 형태) 추출.
