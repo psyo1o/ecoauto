@@ -24,15 +24,16 @@ from tkinter.messagebox import showerror, showinfo
 from data_utils import parse_sn as _parse_sn_raw, parse_time as _parse_time_raw
 from gui_common import LogPanel, set_window_topmost
 from log_utils import log_error
+from config import TOTAL_REVIEW, RECEIPT_REVIEW, MEASIN_REVIEW
 
 
 SN_RE = re.compile(r'^A\d{7}-\d{2}$')  # 예: A2512063-01  (YYMMDD + 팀1자리)
 
 
 # 기본 저장 폴더(요청: 네트워크 경로로 자동 저장)
-DEFAULT_OUTPUT_DIR = r"\\192.168.10.163\측정팀\10.검토\5.종합 검토"
-DEFAULT_SEND_REVIEW_DIR = r"\\192.168.10.163\측정팀\10.검토\2.발송대장 검토"
-DEFAULT_MEASUREMENT_REVIEW_DIR = r"\\192.168.10.163\측정팀\10.검토\3.측정인 검토"
+DEFAULT_OUTPUT_DIR = TOTAL_REVIEW
+DEFAULT_SEND_REVIEW_DIR = RECEIPT_REVIEW
+DEFAULT_MEASUREMENT_REVIEW_DIR = MEASIN_REVIEW
 
 def _extract_yymmdd_from_sample(sn: Any) -> Optional[str]:
     """시료번호/문자열에서 YYMMDD(6자리) 추출. 예: A2601053-01 -> 260105"""

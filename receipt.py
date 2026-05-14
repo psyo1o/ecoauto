@@ -50,17 +50,18 @@ from data_utils import (
     excel_value_to_time, parse_time_range as _parse_time_range_data
 )
 from log_utils import log_error
+from config import REPORT_BASE, RECEIPT_REVIEW, DAEJANG_ROOT
 
 
 # -----------------------------
 # 환경 설정
 # -----------------------------
-BASE_ROOT = r"\\192.168.10.163\측정팀\2.성적서"
+BASE_ROOT = REPORT_BASE
 REPORT_DIRS = ["0 0.입력중", "0 1.완료", "0 2.검토중", "0 3.검토완료", "0 4.출력완료&에코랩입력중", "0 5.최종완료"]
 MOISTURE_DIR = "0.수분량"
 THC_DIR = "0.THC"
-OUTPUT_ROOT = r"\\192.168.10.163\측정팀\10.검토\2.발송대장 검토"
-DAEJANG_DEFAULT_DIR = r"\\192.168.10.163\측정팀\0.시료접수발송대장"
+OUTPUT_ROOT = RECEIPT_REVIEW
+DAEJANG_DEFAULT_DIR = DAEJANG_ROOT
 
 # ★ 샘플 파일(폴더 고정, 파일명만 맞춰두면 됨)
 #   - 수분 CSV 샘플: 0.수분량\수분량샘플.csv

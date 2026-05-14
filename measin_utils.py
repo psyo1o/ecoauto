@@ -16,7 +16,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 
 from selenium_utils import safe_click, set_date_js, close_popup, wait_el
-
+from config import TEAM_ROOT, REPORT_BASE
 
 # ======================================================================
 # URL 상수 (공유)
@@ -24,7 +24,7 @@ from selenium_utils import safe_click, set_date_js, close_popup, wait_el
 LOGIN_URL = "https://측정인.kr/init.go"
 FIELD_URL = "https://측정인.kr/ms/field_outair.do"
 
-NAS_BASE = r"\\192.168.10.163\측정팀\2.성적서"
+NAS_BASE = REPORT_BASE
 NAS_DIRS = ["0 0.입력중", "0 1.완료", "0 2.검토중", "0 3.검토완료",
             "0 4.출력완료&에코랩입력중", "0 5.최종완료"]
 # ======================================================================

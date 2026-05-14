@@ -8,9 +8,10 @@
 import os
 import traceback
 from datetime import datetime
+from config import LOG_DIR
 
 
-BASE_LOG_DIR = r"\\192.168.10.163\측정팀\10.검토\_logs"
+BASE_LOG_DIR = LOG_DIR
 ERROR_LOG_FILE = os.path.join(BASE_LOG_DIR, "error_log.txt")
 
 

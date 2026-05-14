@@ -14,11 +14,12 @@ from selenium_utils import accept_all_alerts as _accept_all_alerts
 from realgrid_utils import rg_paste_to_tr_tab4
 from excel_com_utils import get_excel_app
 from data_utils import sample_to_datestr
+from config import TAB4_MACRO_FILE
 
 # =====================================================================
 # 상수
 # =====================================================================
-ANZE_XLSM  = r"\\192.168.10.163\측정팀\2.성적서\측정인 측정분석 입력 26.01.xlsm"
+ANZE_XLSM  = TAB4_MACRO_FILE
 ANZE_SHEET = "00. 측정분석결과 입력샘플"
 
 TAB4_SELECTOR  = "#ui-id-4"

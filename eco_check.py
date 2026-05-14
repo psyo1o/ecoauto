@@ -38,6 +38,7 @@ from measin_utils import (
 from excel_utils import find_sheet_by_candidates, parse_measuring_record
 from realgrid_utils import rg_api_read_data
 from log_utils import log_error
+from config import MEASIN_REVIEW
 from measin_constants import (
     SKIP_VOL_AND_SPEED, SKIP_SPEED_ONLY, DUST_SKIP_FIELDS,
     SM3_ITEMS as sm3_items,
@@ -51,7 +52,7 @@ from measin_constants import (
 # ------------------------------------------------------------
 
 
-PDF_DIR = r"\\192.168.10.163\측정팀\10.검토\3.측정인 검토\PDF"
+PDF_DIR = os.path.join(MEASIN_REVIEW, "PDF")
 if not os.path.isdir(PDF_DIR):
     os.makedirs(PDF_DIR)
 
@@ -1066,7 +1067,7 @@ def main():
     # 단일 팀이면 기존과 동일하게 team_tag 사용(파일명/로그용)
     team_tag = teams[0] if len(teams) == 1 else ""
 
-    out_dir = r"\\192.168.10.163\측정팀\10.검토\3.측정인 검토"
+    out_dir = MEASIN_REVIEW
     out_name = f"{yyyymmdd} 팀{team_tag} 검토 파일.xlsx" if team_tag else f"{yyyymmdd} 검토 파일.xlsx"
     RESULT_XLSX = os.path.join(out_dir, out_name)
 
