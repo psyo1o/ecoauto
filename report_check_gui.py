@@ -27,7 +27,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-DEFAULT_BROWSE_DIR = r"\\192.168.10.163\측정팀\2.성적서\0 2.검토중"
+from config import REPORT_SRC
+
+DEFAULT_BROWSE_DIR = REPORT_SRC
 
 APP_VERSION = "FILELIST_v3_SAFE_DND"
 
@@ -154,7 +156,8 @@ class ReportCheckFileListGUI:
         ttk.Label(top, text="이름(결과 저장용):").grid(row=0, column=0, sticky="w")
         
         # ✅ [추가] NAS 개인업무 폴더를 뒤져서 직원 이름(폴더명) 목록을 자동으로 가져오기
-        base_dir = r"\\192.168.10.163\개인업무"
+        from config import USER_ROOT
+        base_dir = USER_ROOT
         user_list = []
         try:
             if os.path.exists(base_dir):

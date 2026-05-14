@@ -89,6 +89,10 @@ from tab4_utils import (
 # =====================================================================
 # 설정
 # =====================================================================
+from config import (
+    REPORT_DONE, PDF_AIR, WATER_REPORT_BASE, PDF_WATER
+)
+
 #===============================팝업닫기========================
 
 POPUP_CLOSE_SEL = "body > div > div > div.modal-body > div.modal-footer.row > form > input"
@@ -101,15 +105,15 @@ PDF_TMP_DIR = r"C:\measin_upload_tmp"
 TAB4_FILE_BTN1 = "#newFile1"   # 시험 분석일지(PDF) 업로드 버튼(열기창)
 TAB4_FILE_BTN2 = "#newFile2"   # 측정기록부(PDF) 업로드 버튼(열기창)
 
-FINAL_DONE_DIR = r"\\192.168.10.163\측정팀\2.성적서\0 5.최종완료"
-PDF_BASE_DIR   = r"\\192.168.10.163\측정팀\2.성적서\0.PDF\2.대기pdf"
+FINAL_DONE_DIR = REPORT_DONE
+PDF_BASE_DIR   = PDF_AIR
 
 # ── 수질 ──────────────────────────────────────────────────
 FIELD_URL_WATER    = "https://측정인.kr/ms/field_outwater.do"
 # 수질 성적서: NAS_BASE_WATER\YYYY년\업체명\파일.xlsm
-NAS_BASE_WATER     = r"\\192.168.10.163\측정팀\2.성적서\14.수질성적서"
+NAS_BASE_WATER     = WATER_REPORT_BASE
 # 수질 PDF:    PDF_BASE_DIR_WATER\YYYY년\업체명\파일.pdf
-PDF_BASE_DIR_WATER = r"\\192.168.10.163\측정팀\2.성적서\0.PDF\1.수질pdf"
+PDF_BASE_DIR_WATER = PDF_WATER
 # 수질 탭4 PDF 업로드 셀렉터
 WATER_FILE_BTN1    = "#anzeFile1"   # 분석일지
 WATER_FILE_BTN2    = "#anzeFile2"   # 대행기록부

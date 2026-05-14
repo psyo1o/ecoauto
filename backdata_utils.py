@@ -13,12 +13,13 @@ from openpyxl import load_workbook
 from excel_com_utils import get_excel_app
 from data_utils import sample_to_datestr
 from file_utils import is_fugitive_dust_file
+from config import MOISTURE_ROOT, THC_ROOT
 
 # =====================================================================
 # 상수
 # =====================================================================
-MOIST_ROOT = r"\\192.168.10.163\측정팀\2.성적서\0.수분량"
-THC_ROOT   = r"\\192.168.10.163\측정팀\2.성적서\0.THC"
+MOIST_ROOT = MOISTURE_ROOT
+THC_ROOT   = THC_ROOT
 
 # Excel COM 상수
 XL_UP     = -4162

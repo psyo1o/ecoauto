@@ -18,9 +18,11 @@ warnings.filterwarnings(
     module="openpyxl"
 )
 
-DEFAULT_DAEJANG_DIR = r"\\192.168.10.163\측정팀\0.시료접수발송대장"
-DEFAULT_DRIVE_LOG_DIR = r"\\192.168.10.163\측정팀\10.검토\4.차랑운행일지 검토"
-DEFAULT_ENGINEER_DIR = r"\\192.168.10.163\측정팀\2.성적서"
+from config import DAEJANG_ROOT, DRIVE_LOG_REVIEW, REPORT_BASE
+
+DEFAULT_DAEJANG_DIR = DAEJANG_ROOT
+DEFAULT_DRIVE_LOG_DIR = DRIVE_LOG_REVIEW
+DEFAULT_ENGINEER_DIR = REPORT_BASE
 
 # ============================================================
 # 공통 유틸 모듈 (모듈화)
@@ -498,7 +500,7 @@ def compare_all(dae, drive, eng):
 ###############################################################
 
 def write_report(rows, drive_list):
-    save_dir = r"\\192.168.10.163\측정팀\10.검토\4.차랑운행일지 검토"
+    save_dir = DRIVE_LOG_REVIEW
 
     # ✅ 운행일지 첫열(날짜) 기준으로 연월(YYYYMM) 만들기
     ym = dt.datetime.now().strftime("%Y%m")  # 기본값(운행일지 비어있을 때)

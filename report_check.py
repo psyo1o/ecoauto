@@ -59,9 +59,9 @@ from format_utils import (
 from file_utils import find_best_matching_file as _find_best_file_util
 from excel_utils import find_sheet_by_candidates
 from excel_com_utils import get_excel_app
+from config import REPORT_SRC, DAEJANG_ROOT, USER_ROOT
 
-SRC_DIR = r"\\192.168.10.163\측정팀\2.성적서\0 2.검토중"
-DAEJANG_ROOT = r"\\192.168.10.163\측정팀\0.시료접수발송대장"
+SRC_DIR = REPORT_SRC
 _DAEJANG_AIR_CACHE = {}
 
 
@@ -1140,7 +1140,7 @@ def main(sample_list, user_name):
         return
 
     today = datetime.now().strftime("%Y%m%d")
-    output_dir = rf"\\192.168.10.163\개인업무\{user_name}"
+    output_dir = os.path.join(USER_ROOT, user_name)
     os.makedirs(output_dir, exist_ok=True)
     out_path = os.path.join(output_dir, f"{today} 성적서 추출결과.xlsx")
 
