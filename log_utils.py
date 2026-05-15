@@ -2,7 +2,7 @@
 """
 공통 로그 유틸
 - 각 스크립트/GUI에서 예외 발생 시 파일로 남길 때 사용.
-- 로그 저장 위치: \\192.168.10.163\측정팀\10.검토\_logs\error_log.txt
+- 로그 저장 위치: config.ini의 LOG_DIR 설정값 (기본: _logs\error_log.txt)
 """
 
 import os

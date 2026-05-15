@@ -387,6 +387,20 @@ def read_site_data(driver, sample_no):
         data["측정항목"] = []
 
     # ------------------------------------------------------------
+    # ①-2 탭1 측정목적 수집 (자가측정용/참고용 등)
+    # ------------------------------------------------------------
+    try:
+        sel_el = driver.find_element(By.ID, "edit_meas_purpose")
+        # selected 속성이 있는 option의 텍스트를 가져옴
+        purpose_val = driver.execute_script(
+            "var sel = arguments[0]; return sel.options[sel.selectedIndex].text;", 
+            sel_el
+        )
+        data["측정목적"] = purpose_val.strip() if purpose_val else ""
+    except:
+        data["측정목적"] = ""
+
+    # ------------------------------------------------------------
     # ② 탭2 데이터 수집 (채취시간/기상/산소농도 등)
     # ------------------------------------------------------------
     click_tab(driver, "ui-id-2")
@@ -591,6 +605,20 @@ def _spd_unit_equiv_for_compare(sv: str, ev: str) -> bool:
         return True
     return False
 
+def _vol_unit_equiv_for_compare(sv: str, ev: str) -> bool:
+    """시료채취량 단위 비교 예외: SM3, Sm3, Sm³ 등을 동일하게 취급."""
+    s = ("" if sv is None else str(sv)).strip().lower()
+    e = ("" if ev is None else str(ev)).strip().lower()
+    if not s or not e:
+        return False
+    
+    # 정규화: ³, ^3 등 모든 변형을 3으로 통일
+    s = s.replace("³", "3").replace("^3", "3").replace(" ", "")
+    e = e.replace("³", "3").replace("^3", "3").replace(" ", "")
+    
+    return s == e
+
+
 
 def build_excel_realgird_expected(excel_path: str, sample_no: str, is_dust: bool) -> dict:
     """
@@ -765,7 +793,14 @@ def build_realgird_compare_rows(sample_no: str, site_rg: dict, excel_rg: dict) -
 
             sv = norm_fn(s.get(key)) if isinstance(s, dict) else ""
             ev = norm_fn(e.get(key)) if isinstance(e, dict) else ""
-            ok = (sv == ev) or (key == "spd_u" and _spd_unit_equiv_for_compare(sv, ev))
+            
+            # 단위 예외 처리 (흡인속도단위, 채취량단위)
+            ok = (sv == ev)
+            if not ok:
+                if key == "spd_u" and _spd_unit_equiv_for_compare(sv, ev):
+                    ok = True
+                elif key == "vol_u" and _vol_unit_equiv_for_compare(sv, ev):
+                    ok = True
 
             rows.append({
                 "sample": sample_no,
@@ -887,6 +922,29 @@ def build_comparison_rows(sample_no, site, excel):
         "사이트값": sample_no,
         "엑셀값": excel.get("엑셀시료번호", ""),
         "비교": "OK" if sample_no == excel.get("엑셀시료번호", "") else "NG",
+        "사이트만존재": "",
+        "엑셀만존재": "",
+    })
+
+    # --------------------------------------------------
+    # 측정목적 체크 (사이트: 자가측정용/참고용 등, 엑셀: 1/2)
+    # --------------------------------------------------
+    s_purpose = site.get("측정목적", "")
+    e_purpose = excel.get("측정목적", "")
+    purpose_ok = False
+    if s_purpose == "자가측정용" and e_purpose == "1":
+        purpose_ok = True
+    elif s_purpose == "참고용" and e_purpose == "2":
+        purpose_ok = True
+    elif not s_purpose and not e_purpose:
+        purpose_ok = True
+    
+    rows.append({
+        "sample": sample_no,
+        "항목": "측정목적",
+        "사이트값": s_purpose,
+        "엑셀값": e_purpose,
+        "비교": "OK" if purpose_ok else "NG",
         "사이트만존재": "",
         "엑셀만존재": "",
     })
