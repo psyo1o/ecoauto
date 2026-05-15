@@ -492,9 +492,34 @@ def _save_unique(report_wb: Workbook, out_path: str) -> str:
 # -----------------------------
 def process_daejang(daejang_path: str,
                     start_day: int | None,
-                    end_day: int | None) -> list[str]:
+                    end_day: int | None,
+                    progress_callback=None) -> list[str]:
 
     wb_dj = load_workbook(daejang_path, data_only=True)
+
+    # 1. 처리할 시트 및 총 시료 수 계산
+    target_sheets = []
+    total_samples = 0
+    for sheet_name in wb_dj.sheetnames:
+        if not sheet_name.endswith("일"):
+            continue
+        day_str = sheet_name[:-1]
+        if not day_str.isdigit():
+            continue
+        day_int = int(day_str)
+
+        if start_day is not None and day_int < start_day:
+            continue
+        if end_day is not None and day_int > end_day:
+            continue
+        
+        target_sheets.append(sheet_name)
+        # 각 시트의 유효 시료 수 대략적 계산 (A열에 값이 있는 행)
+        ws = wb_dj[sheet_name]
+        for row in range(2, ws.max_row + 1):
+            sn = str(ws.cell(row=row, column=1).value or "").strip()
+            if is_valid_sample_no(sn):
+                total_samples += 1
 
     # 헤더(원래 그대로)
     headers = [
@@ -511,19 +536,11 @@ def process_daejang(daejang_path: str,
 
     ensure_output_dir()
     out_paths: list[str] = []
+    current_count = 0
 
-    for sheet_name in wb_dj.sheetnames:
-        if not sheet_name.endswith("일"):
-            continue
+    for sheet_name in target_sheets:
         day_str = sheet_name[:-1]
-        if not day_str.isdigit():
-            continue
         day_int = int(day_str)
-
-        if start_day is not None and day_int < start_day:
-            continue
-        if end_day is not None and day_int > end_day:
-            continue
 
         # ✅ 하루마다 워크북 새로 만들어서 저장 (로직 자체는 동일, 결과만 분리)
         report_wb = Workbook()
@@ -546,6 +563,10 @@ def process_daejang(daejang_path: str,
             sn_dj = sn.strip().upper()
             if not is_valid_sample_no(sn_dj):
                 continue
+
+            current_count += 1
+            if progress_callback:
+                progress_callback(current_count, total_samples)
 
             sn_date = parse_sn_date(sn)
             if sn_date is not None:
@@ -862,6 +883,7 @@ class App:
         self.start_day = tk.StringVar()
         self.end_day = tk.StringVar()
         self.status = tk.StringVar(value="대장 파일을 선택하세요.")
+        self.progress = tk.StringVar(value="")
 
         frm_file = tk.Frame(root)
         frm_file.pack(padx=10, pady=5, fill="x")
@@ -884,6 +906,7 @@ class App:
 
         tk.Button(frm_ctrl, text="검사 시작", command=self.run_check).pack(side="left")
         tk.Label(frm_ctrl, textvariable=self.status, fg="blue").pack(side="left", padx=10)
+        tk.Label(frm_ctrl, textvariable=self.progress, fg="darkgreen").pack(side="right", padx=10)
 
         # -----------------------------
         # 로그창(콘솔 대신 UI에 출력)
@@ -956,12 +979,16 @@ class App:
             return
 
         self.status.set("검사 중... 잠시만 기다려주세요.")
+        self.progress.set("")
         self.root.update_idletasks()
 
         # UI 멈춤 방지: 검사 로직은 백그라운드 스레드에서 실행
         def worker():
             try:
-                out_paths = process_daejang(path, s_day, e_day)
+                def progress_cb(cur, total):
+                    self.root.after(0, lambda: self.progress.set(f"진행: {cur} / {total}"))
+
+                out_paths = process_daejang(path, s_day, e_day, progress_callback=progress_cb)
                 self.root.after(0, lambda: self._on_done(out_paths))
             except Exception as e:
                 tb = traceback.format_exc()
@@ -971,11 +998,13 @@ class App:
 
     def _on_error(self, e: Exception, tb: str):
         self.status.set("오류 발생")
+        self.progress.set("")
         # 상세 traceback은 로그창에 남기고, 팝업은 기존처럼 간단히 표시
         print(tb)
         messagebox.showerror("오류", f"검사 중 오류 발생:\n{e}")
 
     def _on_done(self, out_paths):
+        self.progress.set("")
         if not out_paths:
             self.status.set("결과 없음")
             messagebox.showinfo("완료", "해당 일자에 검사할 데이터가 없습니다.")

@@ -107,6 +107,10 @@ def parse_measuring_record(excel_path: str, sample_no: str) -> dict:
         v_comp = ws_input["H7"].value
         data["업소명"] = "" if v_comp is None else str(v_comp).strip()
 
+        # 측정목적 (F10)
+        v_purpose = ws_input["F10"].value
+        data["측정목적"] = "" if v_purpose is None else str(v_purpose).strip()
+
         # 시료번호에서 팀 번호 추출하여 해당 행(row) 파싱
         try:
             team_no = int(sample_no[7]) if len(sample_no) > 7 and sample_no[7].isdigit() else None

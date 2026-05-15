@@ -6,6 +6,7 @@ title 초기 설치 통합 도구
 REM =========================================================
 REM 옵션 및 패키지 목록 설정
 REM =========================================================
+set "NAS_IP=192.168.10.163"
 set "USE_USER=0"
 set "PACKAGES=selenium webdriver-manager openpyxl pandas pywin32 requests pywinauto pyperclip PyPDF2 pypdf tkinterdnd2 pillow"
 set "DRIVER_DIR=C:\chromedriver"
@@ -16,6 +17,8 @@ if "%USE_USER%"=="1" set "PIP_OPTS=--user"
 echo ==============================================
 echo     보안설정 + ChromeDriver + Python 패키지 통합 설치
 echo ==============================================
+echo.
+echo [NAS IP: %NAS_IP%]
 echo.
 
 REM =========================================================
@@ -48,7 +51,7 @@ REM 2. 보안경고 실행 REG 적용
 REM =========================================================
 echo [1/5] 보안경고 실행 REG 적용 중...
 
-reg add "HKCU\Software\Microsoft\Office\16.0\Excel\Security\Trusted Locations\NAS" /v "Path" /t REG_SZ /d "\\192.168.10.163\" /f >nul 2>&1
+reg add "HKCU\Software\Microsoft\Office\16.0\Excel\Security\Trusted Locations\NAS" /v "Path" /t REG_SZ /d "\\%NAS_IP%\" /f >nul 2>&1
 if %errorlevel% neq 0 (
     echo [ERROR] Excel 신뢰 위치(Path) 적용 실패
     pause
@@ -69,7 +72,7 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings\ZoneMap\Domains\192.168.10.163" /v "*" /t REG_DWORD /d 1 /f >nul 2>&1
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings\ZoneMap\Domains\%NAS_IP%" /v "*" /t REG_DWORD /d 1 /f >nul 2>&1
 if %errorlevel% neq 0 (
     echo [ERROR] 로컬 인트라넷 영역 등록 실패
     pause
