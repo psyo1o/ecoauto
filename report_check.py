@@ -1131,7 +1131,7 @@ def uniquify_path(path):
 # ============================================================
 # 메인
 # ============================================================
-def main(sample_list, user_name):
+def main(sample_list, user_name, cancel_event=None):
     log("=== 성적서 자동 복사 시작 ===")
 
     fail_list = []
@@ -1164,6 +1164,10 @@ def main(sample_list, user_name):
         dummy_ws.Name = "Dummy_End"
 
         for item in sample_list:
+            if cancel_event and cancel_event.is_set():
+                log("\n[작업 취소] 사용자에 의해 작업을 중단합니다.")
+                break
+
             # GUI에서 넘어온 경우(튜플)와 단독 실행(문자열) 모두 호환되도록 처리
             if isinstance(item, tuple):
                 sample, src_path = item
@@ -1775,6 +1779,12 @@ def main(sample_list, user_name):
 
         # --- 모든 샘플 작업 종료 후 ---
         add_fail_sheet(wb_out, fail_list)
+        
+        if cancel_event and cancel_event.is_set():
+            # 취소 시 파일 저장 없이 종료
+            wb_out.Close(SaveChanges=False)
+            log("\n=== 취소됨 ===")
+            return
         
         try:
             excel.DisplayAlerts = False

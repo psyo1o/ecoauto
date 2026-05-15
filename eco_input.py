@@ -1448,20 +1448,20 @@ def fill_tab2_realgird(driver, excel_path, sample_no, grid_root_css):
 # 메인
 # =====================================================================
 
-def main():
+def main(cancel_event=None):
     """매체(대기/수질) 선택 후 해당 흐름으로 분기."""
     print("=== 자동 입력 시작 ===")
     media = input("매체 선택 (1=대기 / 2=수질) [기본:1]: ").strip() or "1"
     if media == "2":
-        _main_water()
+        _main_water(cancel_event)
     else:
-        _main_air()
+        _main_air(cancel_event)
 
 
 # ══════════════════════════════════════════════════════════════
 # 수질 흐름  ─  탭4(측정분석결과)만 입력
 # ══════════════════════════════════════════════════════════════
-def _main_water():
+def _main_water(cancel_event=None):
     """수질 흐름: 탭4 진입 → PDF 생성/업로드 → 저장만 수행 (그리드 입력 없음)"""
     login_id = input("측정인 아이디: ").strip()
     login_pw = input("측정인 비밀번호: ").strip()
@@ -1493,6 +1493,10 @@ def _main_water():
 
     idx = 0
     while idx < len(items):
+        if cancel_event and cancel_event.is_set():
+            print("\n[취소됨] 사용자에 의해 작업을 중단합니다.")
+            break
+            
         item = items[idx]
         sample = item["sample"]
         path   = item["path"]
@@ -1535,6 +1539,14 @@ def _main_water():
         back_to_list(driver)
         idx += 1
 
+    if cancel_event and cancel_event.is_set():
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
+        return
+
     print("\n=== 수질 처리 완료 ===")
     try:
         input("엔터 누르면 종료...")
@@ -1545,7 +1557,7 @@ def _main_water():
 # ══════════════════════════════════════════════════════════════
 # 대기 흐름  ─  기존 그대로
 # ══════════════════════════════════════════════════════════════
-def _main_air():
+def _main_air(cancel_event=None):
     job = input("작업 선택 (1=측정인 입력/저장/PDF/백데이터 / 2=백데이터만(로그인X)) [기본:1]: ").strip() or "1"
 
     login_id = ""
@@ -1637,6 +1649,10 @@ def _main_air():
         tab2_done_samples = set()
         idx = 0
         while idx < len(day_samples):
+            if cancel_event and cancel_event.is_set():
+                print("\n[취소됨] 사용자에 의해 작업을 중단합니다.")
+                break
+                
             item = day_samples[idx]
             sample  = item["sample"]
             path    = item["path"]
@@ -1773,6 +1789,17 @@ def _main_air():
 
             back_to_list(driver)
             idx += 1
+
+        if cancel_event and cancel_event.is_set():
+            break
+
+    if cancel_event and cancel_event.is_set():
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
+        return
 
     print("\n=== 대기 처리 완료 ===")
     try:

@@ -88,19 +88,48 @@ class EcoCheckGUI:
             self.team_vars[i] = var
 
     def _create_progress_area(self, parent):
-        """진행률 표시 영역 생성 - 간결하게"""
-        # 진행률 바만 표시 (레이블은 버튼 텍스트로 대체)
-        self.progress_bar = ttk.Progressbar(parent, mode="determinate")
-        self.progress_bar.grid(row=5, column=0, columnspan=2, sticky="ew", padx=5, pady=(5, 5))
+        """진행률 표시 영역 생성"""
+        self.progress_var = tk.StringVar(value="")
+        
+        progress_frame = ttk.Frame(parent)
+        progress_frame.grid(row=5, column=0, columnspan=2, sticky="ew", padx=5, pady=(5, 5))
+        progress_frame.columnconfigure(0, weight=1)
+
+        # 진행률 바
+        self.progress_bar = ttk.Progressbar(progress_frame, mode="determinate")
+        self.progress_bar.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        
+        # 진행률 텍스트 (진행: X / Y)
+        self.lbl_progress = ttk.Label(progress_frame, textvariable=self.progress_var, font=("맑은 고딕", 9, "bold"), foreground="darkgreen")
+        self.lbl_progress.grid(row=0, column=1, sticky="e")
 
     def _create_action_button(self, parent):
         """실행 버튼 생성"""
+        btn_frame = ttk.Frame(parent)
+        btn_frame.grid(row=4, column=0, columnspan=2, pady=(15, 5))
+
         self.start_btn = ttk.Button(
-            parent,
+            btn_frame,
             text="검토 시작",
             command=self._on_start
         )
-        self.start_btn.grid(row=4, column=0, columnspan=2, pady=(15, 5))
+        self.start_btn.pack(side="left", padx=5)
+
+        self.cancel_btn = ttk.Button(
+            btn_frame,
+            text="취소",
+            command=self._on_cancel,
+            state="disabled"
+        )
+        self.cancel_btn.pack(side="left", padx=5)
+
+    def _on_cancel(self):
+        """취소 버튼 핸들러"""
+        if hasattr(self, 'cancel_event'):
+            self.cancel_event.set()
+            self.cancel_btn.config(state="disabled")
+            self.progress_var.set("취소 중...")
+            self.start_btn.config(text="취소 중...")
 
     def _create_log_area(self, parent):
         """로그 영역 생성"""
@@ -138,10 +167,13 @@ class EcoCheckGUI:
         ):
             return
 
+        self.cancel_event = threading.Event()
+
         # 버튼 상태 변경
         self.start_btn.config(state="disabled", text="실행 중...")
-        self.progress_bar.config(mode="indeterminate")
-        self.progress_bar.start(10)
+        self.cancel_btn.config(state="normal")
+        self.progress_bar.config(mode="determinate", value=0)
+        self.progress_var.set("준비 중...")
 
         # input() 가로채기용 답변 준비
         answers = [login_id, login_pw, day, day, team_input]
@@ -190,8 +222,15 @@ class EcoCheckGUI:
                 monitor = ProgressMonitor(original_stdout, self.root, self.start_btn)
                 sys.stdout = monitor
                 
+                def progress_cb(cur, total):
+                    percent = (cur / total) * 100
+                    self.root.after(0, lambda: (
+                        self.progress_bar.config(value=percent),
+                        self.progress_var.set(f"진행: {cur} / {total}")
+                    ))
+
                 try:
-                    eco_check.main()
+                    eco_check.main(progress_callback=progress_cb, cancel_event=self.cancel_event)
                 finally:
                     sys.stdout = original_stdout
                     
@@ -203,7 +242,9 @@ class EcoCheckGUI:
                 builtins.input = old_input
                 self.root.after(0, lambda: (
                     self.start_btn.config(state="normal", text="검토 시작"),
-                    self.progress_bar.stop()
+                    self.cancel_btn.config(state="disabled"),
+                    self.progress_var.set("취소됨" if self.cancel_event.is_set() else "완료"),
+                    self.progress_bar.config(value=0 if self.cancel_event.is_set() else 100)
                 ))
         
         threading.Thread(target=worker, daemon=True).start()

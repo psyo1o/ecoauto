@@ -213,12 +213,16 @@ class ReportCheckFileListGUI:
         runbox.grid(row=2, column=0, sticky="ew")
         runbox.columnconfigure(0, weight=1)
         runbox.columnconfigure(1, weight=1)
+        runbox.columnconfigure(2, weight=1)
 
         self.btn_run = ttk.Button(runbox, text="실행", command=self._on_run)
         self.btn_run.grid(row=0, column=0, sticky="ew", padx=4)
 
+        self.btn_cancel = ttk.Button(runbox, text="취소", command=self._on_cancel, state="disabled")
+        self.btn_cancel.grid(row=0, column=1, sticky="ew", padx=4)
+
         self.btn_quit = ttk.Button(runbox, text="닫기", command=self.root.destroy)
-        self.btn_quit.grid(row=0, column=1, sticky="ew", padx=4)
+        self.btn_quit.grid(row=0, column=2, sticky="ew", padx=4)
 
         self.progress = ttk.Progressbar(outer, mode="determinate")
         self.progress.grid(row=3, column=0, sticky="ew", pady=(8, 0))
@@ -346,6 +350,12 @@ class ReportCheckFileListGUI:
         except Exception as e:
             self._log(f"[DND] 오류: {e}")
 
+    def _on_cancel(self):
+        if hasattr(self, 'cancel_event'):
+            self.cancel_event.set()
+            self.btn_cancel.config(state="disabled")
+            self.btn_run.config(text="취소 중...")
+
     # ---------------- run ----------------
     def _on_run(self):
         user_name = self.ent_name.get().strip()
@@ -375,7 +385,9 @@ class ReportCheckFileListGUI:
             self._log("[WARN] 시료번호 추출 실패 파일(무시됨): " + ", ".join(bad))
 
         total = len(sample_list)
+        self.cancel_event = threading.Event()
         self.btn_run.config(state="disabled", text=f"준비 중... (0/{total})")
+        self.btn_cancel.config(state="normal")
         self.progress.config(maximum=total, value=0)
 
         def worker():
@@ -413,14 +425,21 @@ class ReportCheckFileListGUI:
                 _sys.stdout = monitor
 
                 try:
-                    report_check.main(sample_list, user_name)
+                    report_check.main(sample_list, user_name, cancel_event=self.cancel_event)
                 finally:
                     _sys.stdout = original_stdout
 
-                self.root.after(0, lambda: (
-                    self.btn_run.config(text=f"완료! ({total}/{total})"),
-                    self.progress.config(value=total)
-                ))
+                if self.cancel_event.is_set():
+                    self.root.after(0, lambda: (
+                        self.btn_run.config(text="작업 취소됨"),
+                        self.btn_cancel.config(state="disabled"),
+                        self._log("[INFO] 작업을 취소했습니다.")
+                    ))
+                else:
+                    self.root.after(0, lambda: (
+                        self.btn_run.config(text=f"완료! ({total}/{total})"),
+                        self.progress.config(value=total)
+                    ))
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("오류", str(e)))
                 self._log("[ERROR] " + str(e))
@@ -430,7 +449,10 @@ class ReportCheckFileListGUI:
                         pythoncom.CoUninitialize()
                 except Exception:
                     pass
-                self.root.after(0, lambda: self.btn_run.config(state="normal", text="실행"))
+                self.root.after(0, lambda: (
+                    self.btn_run.config(state="normal"),
+                    self.btn_cancel.config(state="disabled")
+                ))
 
         threading.Thread(target=worker, daemon=True).start()
 
