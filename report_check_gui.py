@@ -22,6 +22,13 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
+# --- DPI Awareness (해상도 배율에 따른 화면 잘림 방지) ---
+try:
+    import ctypes
+    ctypes.windll.shcore.SetProcessDpiAwareness(1)
+except Exception:
+    pass
+
 # 실행 위치와 무관하게 같은 폴더 모듈 import 되도록 고정
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
@@ -355,6 +362,18 @@ class ReportCheckFileListGUI:
             self.cancel_event.set()
             self.btn_cancel.config(state="disabled")
             self.btn_run.config(text="취소 중...")
+
+    def _install_dnd(self):
+        try:
+            import subprocess, sys
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "tkinterdnd2"])
+            messagebox.showinfo(
+                "완료",
+                "tkinterdnd2 설치가 완료되었습니다.\n프로그램을 닫고 다시 실행하면 드래그&드롭이 활성화됩니다.",
+                parent=self.root
+            )
+        except Exception as e:
+            messagebox.showerror("실패", f"설치 실패: {e}\n\n수동 설치: pip install tkinterdnd2", parent=self.root)
 
     # ---------------- run ----------------
     def _on_run(self):
