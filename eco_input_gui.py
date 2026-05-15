@@ -334,9 +334,22 @@ class EcoInputGUI:
         self.progress_bar.grid(row=8, column=0, columnspan=2, sticky="ew", pady=5)
 
     def _create_action_button(self):
+        btn_frame = ttk.Frame(self.input_frame)
+        btn_frame.grid(row=9, column=0, columnspan=2, pady=10)
+
         self.start_btn = ttk.Button(
-            self.input_frame, text="자동 입력 시작", command=self._on_start)
-        self.start_btn.grid(row=9, column=0, columnspan=2, pady=10)
+            btn_frame, text="자동 입력 시작", command=self._on_start)
+        self.start_btn.pack(side="left", padx=5)
+
+        self.cancel_btn = ttk.Button(
+            btn_frame, text="취소", command=self._on_cancel, state="disabled")
+        self.cancel_btn.pack(side="left", padx=5)
+
+    def _on_cancel(self):
+        if hasattr(self, 'cancel_event'):
+            self.cancel_event.set()
+            self.cancel_btn.config(state="disabled")
+            self.start_btn.config(text="취소 중...")
 
     def _create_log_area(self, parent):
         log_frame = ttk.LabelFrame(parent, text="로그", padding=10)
@@ -679,7 +692,9 @@ class EcoInputGUI:
     # 백그라운드 실행
     # ──────────────────────────────────────────────
     def _run_automation(self, answers):
+        self.cancel_event = threading.Event()
         self.start_btn.config(state="disabled", text="준비 중...")
+        self.cancel_btn.config(state="normal")
         self.progress_bar.config(mode="indeterminate")
         self.progress_bar.start(10)
 
@@ -720,7 +735,7 @@ class EcoInputGUI:
                 sys.stdout = ProgressMonitor(original_stdout, self.root, self.start_btn)
                 try:
                     import eco_input as _eco  # lazy import
-                    _eco.main()
+                    _eco.main(cancel_event=self.cancel_event)
                 finally:
                     sys.stdout = original_stdout
 
@@ -732,6 +747,7 @@ class EcoInputGUI:
                 builtins.input = old_input
                 self.root.after(0, lambda: (
                     self.start_btn.config(state="normal", text="자동 입력 시작"),
+                    self.cancel_btn.config(state="disabled"),
                     self.progress_bar.stop()
                 ))
 

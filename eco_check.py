@@ -1076,7 +1076,7 @@ def save_results(sample_rows_map, out_path):
 # ------------------------------------------------------------
 # 메인 실행
 # ------------------------------------------------------------
-def main():
+def main(progress_callback=None, cancel_event=None):
     print("=== 측정인.kr 자동 비교 시스템 시작 ===")
 
     login_id = input("측정인아이디: ").strip()
@@ -1122,6 +1122,9 @@ def main():
             print("❌ 해당 날짜 파일에서 시료번호 없음 → 사이트 로그인 없이 종료")
         return
 
+    total_samples = len(samples)
+    current_count = 0
+
     # 단일 팀이면 기존과 동일하게 team_tag 사용(파일명/로그용)
     team_tag = teams[0] if len(teams) == 1 else ""
 
@@ -1129,17 +1132,26 @@ def main():
     out_name = f"{yyyymmdd} 팀{team_tag} 검토 파일.xlsx" if team_tag else f"{yyyymmdd} 검토 파일.xlsx"
     RESULT_XLSX = os.path.join(out_dir, out_name)
 
-    driver = init_driver()
+    driver = None
     sample_rows = {}
     excel_meta_map = {}  # 시료별 (날짜/업소/채취시간) 메타
 
     try:
+        driver = init_driver()
         login(driver, login_id, login_pw)
         search_date(driver, start_date, end_date)
 
         for sample_no in samples:
+            if cancel_event and cancel_event.is_set():
+                print("\n[취소됨] 작업을 중단합니다.")
+                break
+                
+            current_count += 1
+            if progress_callback:
+                progress_callback(current_count, total_samples)
+                
             print("\n-------------------------------------------")
-            print(" 시료:", sample_no)
+            print(f" 시료({current_count}/{total_samples}):", sample_no)
             print("-------------------------------------------")
 
             # 상세페이지 진입
@@ -1210,10 +1222,20 @@ def main():
                 save_results(sample_rows, RESULT_XLSX)
                 print(f"✅ 저장 완료: {RESULT_XLSX}")
         else:
-            print("⚠ 저장할 결과 없음")
+            if cancel_event and cancel_event.is_set():
+                print("⚠ 취소되어 결과가 저장되지 않았습니다.")
+            else:
+                print("⚠ 저장할 결과 없음")
 
     finally:
-        print("작업 종료. 브라우저는 직접 닫아도 됨.")
+        if cancel_event and cancel_event.is_set() and driver:
+            try:
+                driver.quit()
+                print("취소됨: 브라우저를 닫았습니다.")
+            except:
+                pass
+        else:
+            print("작업 종료. 브라우저는 직접 닫아도 됨.")
 
 
 if __name__ == "__main__":

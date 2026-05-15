@@ -493,7 +493,8 @@ def _save_unique(report_wb: Workbook, out_path: str) -> str:
 def process_daejang(daejang_path: str,
                     start_day: int | None,
                     end_day: int | None,
-                    progress_callback=None) -> list[str]:
+                    progress_callback=None,
+                    cancel_event=None) -> list[str]:
 
     wb_dj = load_workbook(daejang_path, data_only=True)
 
@@ -904,7 +905,12 @@ class App:
         frm_ctrl = tk.Frame(root)
         frm_ctrl.pack(padx=10, pady=10, fill="x")
 
-        tk.Button(frm_ctrl, text="검사 시작", command=self.run_check).pack(side="left")
+        self.start_btn = tk.Button(frm_ctrl, text="검사 시작", command=self.run_check)
+        self.start_btn.pack(side="left")
+
+        self.cancel_btn = tk.Button(frm_ctrl, text="취소", command=self.cancel_check, state="disabled")
+        self.cancel_btn.pack(side="left", padx=5)
+
         tk.Label(frm_ctrl, textvariable=self.status, fg="blue").pack(side="left", padx=10)
         tk.Label(frm_ctrl, textvariable=self.progress, fg="darkgreen").pack(side="right", padx=10)
 
@@ -943,6 +949,12 @@ class App:
 
         self.root.after(50, self._pump_log)
 
+    def cancel_check(self):
+        if hasattr(self, 'cancel_event'):
+            self.cancel_event.set()
+            self.cancel_btn.config(state="disabled")
+            self.status.set("취소 중...")
+
     def browse_file(self):
         path = filedialog.askopenfilename(
             title="시료접수발송대장(대기) 파일 선택",
@@ -978,6 +990,9 @@ class App:
             messagebox.showerror("오류", "시작일이 종료일보다 클 수 없습니다.")
             return
 
+        self.cancel_event = threading.Event()
+        self.start_btn.config(state="disabled")
+        self.cancel_btn.config(state="normal")
         self.status.set("검사 중... 잠시만 기다려주세요.")
         self.progress.set("")
         self.root.update_idletasks()
@@ -988,13 +1003,27 @@ class App:
                 def progress_cb(cur, total):
                     self.root.after(0, lambda: self.progress.set(f"진행: {cur} / {total}"))
 
-                out_paths = process_daejang(path, s_day, e_day, progress_callback=progress_cb)
-                self.root.after(0, lambda: self._on_done(out_paths))
+                out_paths = process_daejang(path, s_day, e_day, progress_callback=progress_cb, cancel_event=self.cancel_event)
+                
+                if self.cancel_event.is_set():
+                    self.root.after(0, lambda: self._on_cancel_done())
+                else:
+                    self.root.after(0, lambda: self._on_done(out_paths))
             except Exception as e:
                 tb = traceback.format_exc()
                 self.root.after(0, lambda: self._on_error(e, tb))
+            finally:
+                self.root.after(0, lambda: (
+                    self.start_btn.config(state="normal"),
+                    self.cancel_btn.config(state="disabled")
+                ))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _on_cancel_done(self):
+        self.status.set("취소됨")
+        self.progress.set("")
+        print("\n[작업 취소] 사용자에 의해 작업이 중단되었습니다.")
 
     def _on_error(self, e: Exception, tb: str):
         self.status.set("오류 발생")
