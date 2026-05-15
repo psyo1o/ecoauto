@@ -106,8 +106,8 @@ class EcoInputGUI:
     # ──────────────────────────────────────────────
     def _setup_window(self):
         self.root.title("측정인 자동 입력 및 백데이터")
-        self.root.geometry("860x1030")
-        self.root.minsize(860, 930)
+        self.root.geometry("860x820")
+        self.root.minsize(860, 750)
         self.root.resizable(True, True)
         set_window_topmost(self.root)
 
@@ -262,7 +262,7 @@ class EcoInputGUI:
                   foreground="gray")
         self.lbl_hint_air.grid(row=0, column=0, columnspan=2, sticky="w")
 
-        self.txt_samples_air = tk.Text(self.air_direct_frame, width=40, height=5,
+        self.txt_samples_air = tk.Text(self.air_direct_frame, width=40, height=4,
                                           relief="flat", highlightthickness=1,
                                           highlightbackground="black", highlightcolor="black")
         self.txt_samples_air.grid(row=1, column=0, sticky="nsew", pady=5)
@@ -298,7 +298,7 @@ class EcoInputGUI:
                   foreground="gray")
         self.lbl_hint_water.grid(row=0, column=0, columnspan=2, sticky="w")
 
-        self.txt_samples_water = tk.Text(self.water_frame, width=40, height=5,
+        self.txt_samples_water = tk.Text(self.water_frame, width=40, height=4,
                                             relief="flat", highlightthickness=1,
                                             highlightbackground="black", highlightcolor="black")
         self.txt_samples_water.grid(row=1, column=0, sticky="nsew", pady=5)
@@ -354,7 +354,7 @@ class EcoInputGUI:
     def _create_log_area(self, parent):
         log_frame = ttk.LabelFrame(parent, text="로그", padding=10)
         log_frame.grid(row=0, column=0, sticky="nsew")
-        self.log_panel = LogPanel(log_frame, height=30)
+        self.log_panel = LogPanel(log_frame, height=25)
         self.log_panel.log_text.configure(width=30)
         self.log_panel.pack(fill="both", expand=True)
         self.log_panel.start_pumping()
