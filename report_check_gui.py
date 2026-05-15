@@ -65,7 +65,7 @@ except Exception as e:
 def _parse_drop_files(data: str):
     """
     tkinterdnd2 event.data 파싱
-    예) "{C:\a b\c.xlsx} {D:\d.xlsm}"
+    예) "{C:\\a b\\c.xlsx} {D:\\d.xlsm}"
     """
     out, token, in_brace = [], "", False
     for ch in data:
