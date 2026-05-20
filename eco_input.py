@@ -90,15 +90,17 @@ from tab4_utils import (
 # 설정
 # =====================================================================
 from config import (
-    REPORT_DONE, PDF_AIR, WATER_REPORT_BASE, PDF_WATER
+    REPORT_DONE,
+    PDF_AIR,
+    WATER_REPORT_BASE,
+    PDF_WATER,
+    PDF_TMP_DIR,
+    FIELD_URL_WATER,
 )
 
 #===============================팝업닫기========================
 
 POPUP_CLOSE_SEL = "body > div > div > div.modal-body > div.modal-footer.row > form > input"
-
-# PDF 임시 생성 폴더(로컬 권장: 업로드 창에서 경로 인식/권한 문제 줄어듦)
-PDF_TMP_DIR = r"C:\measin_upload_tmp"
 
 # 백데이터/탭4 상수 → backdata_utils.py, tab4_utils.py 에서 import 완료
 
@@ -109,7 +111,6 @@ FINAL_DONE_DIR = REPORT_DONE
 PDF_BASE_DIR   = PDF_AIR
 
 # ── 수질 ──────────────────────────────────────────────────
-FIELD_URL_WATER    = "https://측정인.kr/ms/field_outwater.do"
 # 수질 성적서: NAS_BASE_WATER\YYYY년\업체명\파일.xlsm
 NAS_BASE_WATER     = WATER_REPORT_BASE
 # 수질 PDF:    PDF_BASE_DIR_WATER\YYYY년\업체명\파일.pdf

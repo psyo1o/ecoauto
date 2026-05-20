@@ -17,13 +17,6 @@ import threading
 import builtins
 import warnings
 
-# --- DPI Awareness (해상도 배율에 따른 화면 잘림 방지) ---
-try:
-    import ctypes
-    ctypes.windll.shcore.SetProcessDpiAwareness(1)
-except Exception:
-    pass
-
 warnings.filterwarnings(
     "ignore",
     category=UserWarning,
@@ -53,7 +46,7 @@ except Exception:
 # eco_input은 pythoncom/win32com을 즉시 로드하므로
 # 모듈 레벨에서 import하면 tkdnd DLL과 충돌함 → lazy import
 # ------------------------------
-from gui_common import LogPanel, set_window_topmost, set_state_recursive
+from gui_common import LogPanel, set_state_recursive
 from data_utils import extract_sample_from_name as common_extract_sample_from_name, parse_ymd_date
 
 
@@ -116,7 +109,6 @@ class EcoInputGUI:
         self.root.geometry("860x1030")
         self.root.minsize(860, 930)
         self.root.resizable(True, True)
-        set_window_topmost(self.root)
 
     def _create_widgets(self):
         outer = ttk.Frame(self.root)

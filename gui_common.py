@@ -128,11 +128,6 @@ class ProgressButton:
         return self.button.config(**kwargs)
 
 
-def set_window_topmost(window):
-    """윈도우를 최상위로 설정"""
-    window.attributes('-topmost', True)
-
-
 def center_window(window, width=None, height=None):
     """윈도우를 화면 중앙에 배치"""
     window.update_idletasks()

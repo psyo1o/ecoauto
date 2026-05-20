@@ -16,7 +16,7 @@ import builtins
 
 # 공통 모듈 import
 from data_utils import parse_ymd_date
-from gui_common import LogPanel, set_window_topmost, create_labeled_entry
+from gui_common import LogPanel, create_labeled_entry
 
 # 메인 로직 import
 import eco_check
@@ -35,7 +35,6 @@ class EcoCheckGUI:
         self.root.title("측정인 검토")
         self.root.geometry("700x550")
         self.root.minsize(650, 500)
-        set_window_topmost(self.root)
 
     def _create_widgets(self):
         """모든 위젯 생성"""

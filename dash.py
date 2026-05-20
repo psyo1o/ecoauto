@@ -22,7 +22,7 @@ from tkinter.filedialog import askopenfilename, askopenfilenames, asksaveasfilen
 from tkinter.messagebox import showerror, showinfo
 
 from data_utils import parse_sn as _parse_sn_raw, parse_time as _parse_time_raw
-from gui_common import LogPanel, set_window_topmost
+from gui_common import LogPanel
 from log_utils import log_error
 from config import TOTAL_REVIEW, RECEIPT_REVIEW, MEASIN_REVIEW
 
@@ -634,7 +634,6 @@ class DashGUI:
         self.root.title("발송대장/측정인 종합 검토")
         self.root.geometry("860x620")
         self.root.minsize(820, 560)
-        set_window_topmost(self.root)
 
         self.review_paths: List[str] = []
         self.result_queue: "queue.Queue[Tuple[Any, ...]]" = queue.Queue()
