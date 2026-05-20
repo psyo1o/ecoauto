@@ -38,7 +38,7 @@ from measin_utils import (
 from excel_utils import find_sheet_by_candidates, parse_measuring_record
 from realgrid_utils import rg_api_read_data
 from log_utils import log_error
-from config import MEASIN_REVIEW
+from config import MEASIN_REVIEW, MEASIN_PDF_DIR
 from measin_constants import (
     SKIP_VOL_AND_SPEED, SKIP_SPEED_ONLY, DUST_SKIP_FIELDS,
     SM3_ITEMS as sm3_items,
@@ -52,7 +52,7 @@ from measin_constants import (
 # ------------------------------------------------------------
 
 
-PDF_DIR = os.path.join(MEASIN_REVIEW, "PDF")
+PDF_DIR = MEASIN_PDF_DIR
 if not os.path.isdir(PDF_DIR):
     os.makedirs(PDF_DIR)
 

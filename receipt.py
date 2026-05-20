@@ -50,26 +50,26 @@ from data_utils import (
     excel_value_to_time, parse_time_range as _parse_time_range_data
 )
 from log_utils import log_error
-from config import REPORT_BASE, RECEIPT_REVIEW, DAEJANG_ROOT
+from config import (
+    REPORT_BASE,
+    REPORT_WORKFLOW_DIRS,
+    RECEIPT_REVIEW,
+    DAEJANG_ROOT,
+    MOISTURE_ROOT,
+    THC_ROOT,
+    MOISTURE_SAMPLE,
+    THC_CSV_SAMPLE,
+    THC_FID_SAMPLE,
+)
 
 
 # -----------------------------
-# 환경 설정
+# 환경 설정 (경로는 config.ini)
 # -----------------------------
 BASE_ROOT = REPORT_BASE
-REPORT_DIRS = ["0 0.입력중", "0 1.완료", "0 2.검토중", "0 3.검토완료", "0 4.출력완료&에코랩입력중", "0 5.최종완료"]
-MOISTURE_DIR = "0.수분량"
-THC_DIR = "0.THC"
+REPORT_DIRS = REPORT_WORKFLOW_DIRS
 OUTPUT_ROOT = RECEIPT_REVIEW
 DAEJANG_DEFAULT_DIR = DAEJANG_ROOT
-
-# ★ 샘플 파일(폴더 고정, 파일명만 맞춰두면 됨)
-#   - 수분 CSV 샘플: 0.수분량\수분량샘플.csv
-#   - THC CSV 샘플 : 0.THC\FID샘플.csv
-#   - THC FID 샘플 : 0.THC\PF샘플.FID
-MOISTURE_SAMPLE = os.path.join(BASE_ROOT, MOISTURE_DIR, "수분량샘플.csv")
-THC_CSV_SAMPLE  = os.path.join(BASE_ROOT, THC_DIR, "FID샘플.csv")
-THC_FID_SAMPLE  = os.path.join(BASE_ROOT, THC_DIR, "PF샘플.FID")
 
 # ★ 샘플 signature 캐시(속도)
 _TEMPLATE_SIG = {"moisture_csv": None, "thc_csv": None, "thc_fid": None}
@@ -213,12 +213,7 @@ def moisture_file_path(sn: str):
     d = parse_sn_date(sn)
     if d is None:
         return None
-    folder = os.path.join(
-        BASE_ROOT,
-        MOISTURE_DIR,
-        f"{d.year}",
-        f"{d.month}월"
-    )
+    folder = os.path.join(MOISTURE_ROOT, f"{d.year}", f"{d.month}월")
     return os.path.join(folder, f"{sn}.csv")
 
 
@@ -227,12 +222,7 @@ def find_thc_file(sn: str, prefer_ext: str | None = None):
     if d is None:
         return None, "파일없음"
 
-    folder = os.path.join(
-        BASE_ROOT,
-        THC_DIR,
-        f"{d.year}",
-        f"{d.month}월"
-    )
+    folder = os.path.join(THC_ROOT, f"{d.year}", f"{d.month}월")
     if not os.path.isdir(folder):
         return None, "파일없음"
 
@@ -877,7 +867,6 @@ class QueueWriter:
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
-        root.attributes('-topmost', True)
         root.title("발송대장/성적서/수분THC백데이터 검토")
 
         self.daejang_path = tk.StringVar()

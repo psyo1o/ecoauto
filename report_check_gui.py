@@ -57,7 +57,7 @@ except Exception:
 # ------------------------------
 IMPORT_ERR = None
 try:
-    from gui_common import LogPanel, set_window_topmost
+    from gui_common import LogPanel
     from data_utils import extract_sample_from_name as common_extract_sample_from_name
     import report_check
     try:
@@ -139,7 +139,6 @@ class ReportCheckFileListGUI:
         self.root.title("성적서 검토 - 파일 리스트 - " + APP_VERSION)
         self.root.geometry("600x650")
         self.root.minsize(550, 620)
-        set_window_topmost(self.root)
 
         self._build_ui()
         self._setup_cleanup()
