@@ -7,8 +7,10 @@ config.ini + 기본값 로드.
 import os
 import configparser
 
+# 이 파일은 3.py 폴더 안. config.ini는 상위 프로그램 루트에 둠.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "config.ini")
+PROJECT_ROOT = os.path.dirname(BASE_DIR)
+CONFIG_PATH = os.path.join(PROJECT_ROOT, "config.ini")
 
 config = configparser.ConfigParser()
 
@@ -29,6 +31,7 @@ _PATHS = {
     "REPORT_SRC": r"%(REPORT_BASE)s\0 2.검토중",
     "REPORT_DONE": r"%(REPORT_BASE)s\0 5.최종완료",
     "WATER_REPORT_BASE": r"%(REPORT_BASE)s\14.수질성적서",
+    "WATER_REPORT_INPUT": r"%(WATER_REPORT_BASE)s\0.입력중",
     "DAEJANG_ROOT": r"%(TEAM_ROOT)s\0.시료접수발송대장",
     "RECEIPT_REVIEW": r"%(REVIEW_ROOT)s\2.발송대장 검토",
     "MEASIN_REVIEW": r"%(REVIEW_ROOT)s\3.측정인 검토",
@@ -38,9 +41,14 @@ _PATHS = {
     "LOG_DIR": r"%(REVIEW_ROOT)s\_logs",
     "PDF_AIR": r"%(REPORT_BASE)s\0.PDF\2.대기pdf",
     "PDF_WATER": r"%(REPORT_BASE)s\0.PDF\1.수질pdf",
+    "WATER_RECORD_PDF_DIR": r"\\%(IP)s\scan\PDF",
     "MOISTURE_ROOT": r"%(REPORT_BASE)s\0.수분량",
     "THC_ROOT": r"%(REPORT_BASE)s\0.THC",
     "TAB4_MACRO_FILE": r"%(REPORT_BASE)s\측정인 측정분석 입력 26.01.xlsm",
+    "WATER_TAB4_MACRO_FILE": r"%(REPORT_BASE)s\측정인 측정분석 입력 26.05(수질).xlsm",
+    "WATER_TAB4_GRID_ROOT": "#gridAnalySampAnzeDataAirItemList1",
+    "WATER_TAB4_FILE1": "#anzeFile1",
+    "WATER_TAB4_FILE2": "#anzeFile2",
     "MOISTURE_SAMPLE": r"%(MOISTURE_ROOT)s\수분량샘플.csv",
     "THC_CSV_SAMPLE": r"%(THC_ROOT)s\FID샘플.csv",
     "THC_FID_SAMPLE": r"%(THC_ROOT)s\PF샘플.FID",
@@ -50,7 +58,7 @@ _PATHS = {
 _URLS = {
     "LOGIN_URL": "https://측정인.kr/init.go",
     "FIELD_URL_AIR": "https://측정인.kr/ms/field_outair.do",
-    "FIELD_URL_WATER": "https://측정인.kr/ms/field_outwater.do",
+    "FIELD_URL_WATER": "https://측정인.kr/ms/field_water.do",
 }
 
 # DEFAULT에 경로·URL도 넣어 %(REPORT_BASE)s 등 치환이 동작하도록 함
@@ -91,6 +99,7 @@ REPORT_WORKFLOW_DIRS = cfg_list("REPORT_WORKFLOW_DIRS")
 REPORT_SRC = cfg("REPORT_SRC")
 REPORT_DONE = cfg("REPORT_DONE")
 WATER_REPORT_BASE = cfg("WATER_REPORT_BASE")
+WATER_REPORT_INPUT = cfg("WATER_REPORT_INPUT")
 
 DAEJANG_ROOT = cfg("DAEJANG_ROOT")
 
@@ -103,9 +112,14 @@ LOG_DIR = cfg("LOG_DIR")
 
 PDF_AIR = cfg("PDF_AIR")
 PDF_WATER = cfg("PDF_WATER")
+WATER_RECORD_PDF_DIR = cfg("WATER_RECORD_PDF_DIR")
 MOISTURE_ROOT = cfg("MOISTURE_ROOT")
 THC_ROOT = cfg("THC_ROOT")
 TAB4_MACRO_FILE = cfg("TAB4_MACRO_FILE")
+WATER_TAB4_MACRO_FILE = cfg("WATER_TAB4_MACRO_FILE")
+WATER_TAB4_GRID_ROOT = cfg("WATER_TAB4_GRID_ROOT")
+WATER_TAB4_FILE1 = cfg("WATER_TAB4_FILE1")
+WATER_TAB4_FILE2 = cfg("WATER_TAB4_FILE2")
 
 MOISTURE_SAMPLE = cfg("MOISTURE_SAMPLE")
 THC_CSV_SAMPLE = cfg("THC_CSV_SAMPLE")

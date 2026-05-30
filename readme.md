@@ -1,6 +1,6 @@
 # 측정인 자동화 도구 안내서
 
-> 마지막 업데이트: 2026-04-29
+> 마지막 업데이트: 2026-05-30 (폴더 구조: `3.py`)
 > 대상 독자: 처음 사용하는 담당자, 인수인계 받는 사용자, 운영 담당자
 
 ---
@@ -11,7 +11,7 @@
 
 주요 목적은 다음과 같다.
 
-- NAS에 저장된 성적서 엑셀 파일을 읽어 측정인.kr에 자동 입력
+- NAS에 저장된 성적서 엑셀 파일을 읽어 측정인.kr에 자동 입력 (대기·수질)
 - 사이트에 입력된 값과 엑셀 값을 비교 검토
 - 발송대장, 차량운행일지, 성적서 상태를 점검해 결과 보고서 생성
 - 탭4 PDF를 자동 또는 반자동으로 생성하고 최종본을 병합
@@ -38,7 +38,7 @@ Windows 전용인 이유는 다음 기능을 사용하기 때문이다.
 - Excel COM 자동화 (`win32com`, `pywin32`)
 - 파일 열기 창 자동 제어 (`pywinauto`)
 - Windows 레지스트리 수정으로 보안 경고 완화
-- `.bat` 실행 파일 기반 시작 방식
+- 통합 런처(`2.검토 및 입력프로그램.pyw`) 더블클릭 실행 (콘솔 창 없음)
 
 ### 2-2. 첫 설치 순서
 
@@ -47,7 +47,7 @@ Windows 전용인 이유는 다음 기능을 사용하기 때문이다.
 권장 순서는 다음과 같다.
 
 1. `0.처음사용시\드라이버+파이썬패키지+보안경고 통합설치.bat` 실행
-2. 설치가 끝나면 프로그램 폴더의 각 `.bat` 실행 파일 사용
+2. 설치가 끝나면 프로그램 폴더의 **`2.검토 및 입력프로그램.pyw`** 를 더블클릭해 사용
 
 통합 설치 파일이 하는 일은 다음과 같다.
 
@@ -88,23 +88,27 @@ Windows 전용인 이유는 다음 기능을 사용하기 때문이다.
 
 ## 3. 어떤 파일을 실행하면 되는지
 
-실행은 `.bat` 파일을 더블클릭하면 된다. 각 배치 파일은 내부에서 대응되는 Python GUI 파일을 실행한다.
+**실행 진입점은 하나뿐이다.** NAS 프로그램 폴더에서 **`2.검토 및 입력프로그램.pyw`** 를 더블클릭하면 통합 런처 GUI가 열린다. 원하는 도구 버튼을 누르면 해당 Python GUI가 백그라운드로 실행된다.
 
-| 배치 파일 | 실행되는 Python 파일 | 용도 |
+| 런처 버튼 | 실행되는 Python 파일 | 용도 |
 |------|------|------|
-| `1.측정인 자동입력 V2.9.bat` | `eco_input_gui.py` | 측정인.kr 자동 입력, 백데이터, 탭4 PDF 처리 |
-| `2.측정인 검토 V2.5.bat` | `eco_check_gui.py` | 사이트 값과 엑셀 값 비교 검토 |
-| `3.발송대장 검토 V1.7.bat` | `receipt.py` | 발송대장 기준 상태 점검 |
-| `4.종합 검토 V1.6.bat` | `dash.py` | 여러 검토 결과를 종합한 대시보드 생성 |
-| `5.성적서 검토 V2.8.bat` | `report_check_gui.py` | 성적서 파일 자체 무결성 검사 |
-| `6.차량운행일지 검토 V1.8.bat` | `Vehicle_operation_log.py` | 차량운행일지/근무시간 검토 |
-| `7.PDF 생성 V1.2.bat` | `tab4_pdf_final_gui.py` | 탭4 PDF 최종본 수동 생성 |
+| 1. 측정인 자동입력 | `3.py\eco_input_gui.py` | 측정인.kr 자동 입력, 백데이터, 탭4 PDF 처리 |
+| 2. 측정인 검토 | `3.py\eco_check_gui.py` | 사이트 값과 엑셀 값 비교 검토 |
+| 3. 발송대장 검토 | `3.py\receipt.py` | 발송대장 기준 상태 점검 |
+| 4. 종합 검토 | `3.py\dash.py` | 여러 검토 결과를 종합한 대시보드 생성 |
+| 5. 성적서 검토 | `3.py\report_check_gui.py` | 성적서 파일 자체 무결성 검사 |
+| 6. 차량운행일지 검토 | `3.py\Vehicle_operation_log.py` | 차량운행일지/근무시간 검토 |
+| 7. PDF 생성 | `3.py\tab4_pdf_final_gui.py` | 탭4 PDF 최종본 수동 생성 |
 
-배치 파일은 공통적으로 다음 방식으로 동작한다.
+런처 동작 요약:
 
-- 콘솔 인코딩을 UTF-8로 설정 (`chcp 65001`)
-- `pythonw`로 GUI 실행
-- 별도 콘솔창 없이 GUI 프로그램 시작
+- `.pyw` 확장자로 더블클릭 시 **콘솔 창이 뜨지 않음**
+- 하위 프로그램은 `pythonw` + `CREATE_NO_WINDOW` 로 실행
+- 작업 디렉터리(`cwd`)는 **`3.py` 폴더**로 고정 (import·UNC 경로 이탈 방지)
+- Python 소스는 루트가 아니라 **`3.py`** 폴더에 모음 (`config.ini`는 루트에 유지)
+
+> 예전에 쓰던 `1.측정인 자동입력 V2.9.bat` ~ `7.PDF 생성 V1.2.bat` 은 런처로 대체되어 **삭제**했다.  
+> `0.처음사용시` 폴더의 설치용 `.bat` 만 그대로 둔다.
 
 ---
 
@@ -116,7 +120,7 @@ Windows 전용인 이유는 다음 기능을 사용하기 때문이다.
 
 - NAS 성적서를 기준으로 측정인.kr에 자동 입력해야 할 때
 - 대기 탭1/탭2/탭4 입력이 필요할 때
-- 수질 탭4 업로드만 처리할 때
+- 수질 탭2·탭4·PDF 입력이 필요할 때
 - 백데이터와 PDF 생성까지 한 번에 처리할 때
 
 핵심 파일:
@@ -124,13 +128,104 @@ Windows 전용인 이유는 다음 기능을 사용하기 때문이다.
 - `eco_input_gui.py`
 - `eco_input.py`
 - `backdata_utils.py`
-- `tab4_utils.py`
+- `tab4_utils.py` (대기 탭4)
+- `water_input_utils.py` (수질 탭2·탭4)
+
+GUI 요약 (`eco_input_gui.py`):
+
+- 매체: **대기(1)** / **수질(2)** — 선택에 따라 입력 영역 전환
+- **대기** 옵션(2열 3행): 탭1 | 백데이터 / 탭2 | 탭2 PDF / 탭4 | 탭4 PDF  
+  - 탭2 끄면 탭2 PDF 자동 OFF, 탭4 끄면 탭4 PDF 자동 OFF  
+  - 작업 `2`(백데이터만)이면 사이트 입력·PDF 체크는 모두 OFF, 백데이터만 ON
+- **수질** 옵션(한 줄): 시험의뢰정보 (탭2) / 탭4 / 탭4 PDF (탭4 끄면 PDF OFF)
+- 수질 파일 추가·NAS 확인 기본 경로: `14.수질성적서\0.입력중` (`WATER_REPORT_INPUT`)
+- 실행 시 `main()`·`input()` 가로채기 없이 `_main_air()` / `_main_water()`에 옵션을 **키워드 인자**로 직접 전달 (GUI 무반응 방지)
 
 최근 반영된 동작:
 
 - 상세 진입이 실패했는데 목록 검색창이 없으면 로그인 세션 만료로 보고, 확인창을 처리한 뒤 재로그인·날짜 검색을 다시 한 후 같은 시료부터 재시도
 - 탭2 저장이 성공했고 PDF 업로드를 켠 경우에는 PDF 삭제까지 끝난 시료만 완료로 보고 이후 사이트 입력을 건너뜀(탭4만 남았으면 탭4만 진행)
 - 탭2 저장에 실패했거나 PDF 업로드·삭제가 끝나지 않은 시료는 완료로 표시하지 않아 세션 복구 후 같은 시료를 다시 시도
+- 수질 시료번호 `W2606300-01` 형식 지원 (`data_utils.extract_sample_from_name`)
+- 수질 탭4: PDF 없으면 임시저장(`#btnTempSave`), PDF 있으면 분석완료(`#btnCompSave`, 확인 2회)
+- 수질 탭4만·탭2 미완료 시 탭2 입력완료 선행 후 `#ui-id-4` 진입
+- 수질 PDF 업로드: `#anzeFile1`(시험분석일지) / `#anzeFile2`(측정기록부) — 대기 탭4 `#newFile1/2` 와 **id 다름**
+- 수질 병합 PDF·대행기록부 단독 PDF 저장 경로는 **§4-1-1**, `config.ini` 참고
+
+### 4-1-1. 수질 자동입력 상세 (유지보수·수정 시)
+
+사이트·검색:
+
+| 항목 | 값 | 수정 위치 |
+|------|-----|-----------|
+| URL | `https://측정인.kr/ms/field_water.do` | `config.ini` → `FIELD_URL_WATER` |
+| 성적서 NAS 검색 | `...\14.수질성적서\0.입력중` | `WATER_REPORT_INPUT` |
+| 시료번호 형식 | `W` + YYMMDD + 팀 + `-` + 순번 | `data_utils.extract_sample_from_name` |
+
+GUI → `_main_water()` 인자:
+
+| 체크박스 | 인자 | 비고 |
+|----------|------|------|
+| 시험의뢰정보 (탭2) | `do_tab2` | PE / 용량·개수 1 / 측정위치 `폭기조` → `#btnSaveMsFieldDoc` (확인 2회) |
+| 탭4 | `do_tab4` | OFF면 PDF도 OFF |
+| 탭4 PDF | `do_pdf_final` | 분석일지+대행기록부 생성·업로드·병합 저장 |
+
+탭·버튼 셀렉터 (`water_input_utils.py` / `eco_input.py`):
+
+| 용도 | 셀렉터 |
+|------|--------|
+| 탭2 | `a#ui-id-2` |
+| 탭4 | `a#ui-id-4` |
+| 탭2 입력완료 | `#btnSaveMsFieldDoc` |
+| 탭4 임시저장 (PDF OFF) | `#btnTempSave` |
+| 탭4 분석완료 (PDF ON) | `#btnCompSave` (확인 2회) |
+| 탭4 **재수정·분석완료** 시 수정 사유 | `#btnCompSave` 후만 — `#update_reason` → `오기 수정합니다.` → `#btnSaveupdateReason` → 확인 (`tab4_after_comp_save_confirm`). **임시저장에는 안 뜸** |
+| PDF 파일1 (시험분석일지) | `#anzeFile1` ← `WATER_TAB4_FILE1` / `WATER_FILE_BTN1` |
+| PDF 파일2 (측정기록부) | `#anzeFile2` ← `WATER_TAB4_FILE2` / `WATER_FILE_BTN2` |
+
+매크로 엑셀 (`WATER_TAB4_MACRO_FILE`):
+
+| 항목 | 위치 |
+|------|------|
+| 파일 | `\\...\2.성적서\측정인 측정분석 입력 26.05(수질).xlsm` |
+| 시료번호 | A6 |
+| 시료접수일시 / 분석시작 / 분석종료 | H6 / H7 / J7 |
+| RealGrid 데이터 | 시트 `00. 측정분석결과 입력샘플` 등, **8행=헤더**, **9~54행**, **A~M** |
+| 붙여넣기 | 그리드 **4열(측정항목)** 부터 엑셀 **A~M** 전체 (`water_input_utils`) |
+
+RealGrid (`WATER_TAB4_GRID_ROOT`):
+
+| 항목 | 기본값 |
+|------|--------|
+| 루트 id | `#gridAnalySampAnzeDataAirItemList1` (바깥 래퍼 `#gridMain1` 과 별도) |
+| 항목명 매칭 | 8행 헤더와 RealGrid 헤더 정규화 후 매칭 (`_norm_rg`) |
+
+PDF 저장 (성적서 엑셀 = NAS에서 찾은 `.xlsm` / `.xls`):
+
+| 종류 | 경로 규칙 | config 키 | 코드 |
+|------|-----------|-----------|------|
+| **병합본** (분석일지+대행기록부) | `{PDF_WATER}\{연도}년\{대행기록부 D3, 공백제거}\{엑셀파일명}.pdf` | `PDF_WATER` | `build_final_path_water()`, `read_water_record_d3()` |
+| **대행기록부만** | `{WATER_RECORD_PDF_DIR}\{엑셀파일명}.pdf` (폴더 없으면 생성) | `WATER_RECORD_PDF_DIR` | `build_water_record_copy_path()` |
+
+예시 (IP 192.168.10.163):
+
+- 병합: `\\192.168.10.163\측정팀\2.성적서\0.PDF\1.수질pdf\2026년\문의휴게소\W2606300-01 문의휴게소.pdf` (D3 `문의 휴 게소` → `문의휴게소`)
+- 대행만: `\\192.168.10.163\scan\PDF\W2606300-01 문의휴게소.pdf`
+
+PDF 생성·업로드 순서 (`make_tab4_pdfs_water` → `upload_tab4_pdfs`):
+
+1. 성적서 엑셀에서 `분석일지` / `대행기록부` 시트 각각 PDF export
+2. 두 PDF 병합 → `PDF_WATER` 경로 저장
+3. 대행기록부 PDF만 → `scan\PDF` 복사
+4. 탭4 재확인(`open_water_tab4`) 후 `#anzeFile1`·`#anzeFile2`에 `send_keys` 업로드
+5. `#btnCompSave` + 확인 2회
+
+수정 시 같이 볼 파일:
+
+- `eco_input.py` — `_main_water()`, `make_tab4_pdfs_water()`, `read_water_record_d3()`
+- `water_input_utils.py` — 탭2/탭4·RealGrid
+- `eco_input_gui.py` — `_build_answers_water()`
+- `config.ini` / `config.py` — 아래 PATHS·URLS 수질 키
 
 ### 4-2. 측정인 검토
 
@@ -234,25 +329,37 @@ Windows 전용인 이유는 다음 기능을 사용하기 때문이다.
 일반적인 대기 업무 흐름은 다음 순서로 이해하면 된다.
 
 1. 성적서 파일 준비
-2. `1.측정인 자동입력`으로 사이트 입력, 백데이터, PDF 처리
-3. `2.측정인 검토`로 사이트와 엑셀 비교
-4. `5.성적서 검토`로 파일 자체 검토
-5. 필요 시 `7.PDF 생성`으로 최종 PDF 생성
-6. 일자 단위 마감 검토 시 `3.발송대장 검토`
-7. 전체 현황 요약이 필요하면 `4.종합 검토`
+2. 런처에서 **측정인 자동입력**으로 사이트 입력, 백데이터, PDF 처리
+3. 런처에서 **측정인 검토**로 사이트와 엑셀 비교
+4. 런처에서 **성적서 검토**로 파일 자체 검토
+5. 필요 시 **PDF 생성**으로 최종 PDF 생성
+6. 일자 단위 마감 검토 시 **발송대장 검토**
+7. 전체 현황 요약이 필요하면 **종합 검토**
 
-수질은 대기보다 단순하다.
+수질은 런처 **측정인 자동입력** GUI에서 매체 **수질**을 선택해 처리한다. 상세 표·셀렉터는 **§4-1-1** 참고.
 
-- 주로 `1.측정인 자동입력`의 수질 모드에서 탭4 업로드와 PDF 처리 중심으로 사용
+- 사이트: [현장측정분석(수질)](https://측정인.kr/ms/field_water.do)
+- 성적서 검색·파일 추가: `WATER_REPORT_INPUT` (`...\14.수질성적서\0.입력중`)
+- 탭2: PE / 용량·개수 1 / 폭기조 → `#btnSaveMsFieldDoc`
+- 탭4: 매크로 엑셀 → 날짜 H6/H7/J7, RealGrid 4열부터 A~M, PDF `#anzeFile1/2` 업로드
+- 병합 PDF: `PDF_WATER\{연도}년\{대행기록부 D3 공백제거}\{엑셀파일명}.pdf`
+- 대행기록부만: `WATER_RECORD_PDF_DIR` (기본 `\\...\scan\PDF`)
 
 ---
 
 ## 6. 전체 구조 한눈에 보기
 
 ```text
+[프로그램 루트]
+  ├─ 2.검토 및 입력프로그램.pyw   ← 더블클릭 진입점
+  ├─ config.ini                  ← 경로·URL 설정 (선택)
+  └─ 3.py\                       ← Python 소스 전부
+        ├─ config.py, eco_input.py, …
+        └─ *_gui.py, *_utils.py
+
 [사용자 실행]
-  └─ .bat 실행
-      └─ tkinter GUI 실행
+  └─ 2.검토 및 입력프로그램.pyw (통합 런처)
+      └─ 3.py\ 안의 선택 도구 GUI 실행
           └─ 핵심 로직 호출
               ├─ Selenium으로 측정인.kr 조작
               ├─ openpyxl/Excel COM으로 엑셀 읽기
@@ -262,9 +369,11 @@ Windows 전용인 이유는 다음 기능을 사용하기 때문이다.
 
 구조를 계층으로 나누면 다음과 같다.
 
-### 6-1. GUI 계층
+### 6-1. 실행·GUI 계층
 
-- `eco_input_gui.py`
+- `2.검토 및 입력프로그램.pyw` — 7개 도구 통합 런처 (프로그램 루트)
+- `3.py\` — 아래 GUI·로직·유틸 Python 파일 전부
+- `eco_input_gui.py` (3.py 안)
 - `eco_check_gui.py`
 - `report_check_gui.py`
 - `receipt.py`
@@ -286,6 +395,7 @@ Windows 전용인 이유는 다음 기능을 사용하기 때문이다.
 - `report_check.py`
 - `backdata_utils.py`
 - `tab4_utils.py`
+- `water_input_utils.py`
 - `measin_constants.py`
 
 ### 6-3. 공통 유틸리티 계층
@@ -321,13 +431,23 @@ eco_input.py
 ### 7-2. 수질 자동입력 흐름
 
 ```text
-NAS 수질 성적서(.xlsm)
+NAS 수질 성적서 (0.입력중)              매크로: 측정인 측정분석 입력 26.05(수질).xlsm
+  ↓                                              ↓
+eco_input._main_water() + water_input_utils.py
+  ├─ 로그인·날짜·시료번호 검색 (field_water.do)
+  ├─ [옵션] 탭2: PE/1/1/폭기조 → #btnSaveMsFieldDoc
+  └─ [옵션] 탭4: a#ui-id-4
+      ├─ 매크로 읽기 (A6, H6/H7/J7, 8행 헤더·9~54행 A~M)
+      ├─ 날짜 필드 입력 (#smpl_rcpt_dt, #anze_start_dt, #anze_end_dt)
+      ├─ RealGrid: 4열(측정항목)부터 A~M 붙여넣기 (#gridAnalySampAnzeDataAirItemList1)
+      ├─ [PDF ON] 성적서 시트 → PDF 2종 생성
+      │     ├─ 병합 → PDF_WATER\{연도}년\{대행기록부 D3 공백제거}\{엑셀명}.pdf
+      │     ├─ 대행만 → WATER_RECORD_PDF_DIR\{엑셀명}.pdf  (scan\PDF 등)
+      │     ├─ 업로드 #anzeFile1, #anzeFile2
+      │     └─ #btnCompSave (확인 2회)
+      └─ [PDF OFF] #btnTempSave
   ↓
-eco_input.py
-  └─ 탭4만 처리
-      ├─ PDF 생성
-      ├─ 업로드
-      └─ 저장
+목록 복귀 → 다음 시료
 ```
 
 ### 7-3. 백데이터 생성 흐름
@@ -364,8 +484,11 @@ NAS 저장
 
 - 성적서 기본 NAS: `\\192.168.10.163\측정팀\2.성적서` (REPORT_BASE)
 - 수질 성적서 NAS: `\\192.168.10.163\측정팀\2.성적서\14.수질성적서` (WATER_REPORT_BASE)
+- 수질 입력중(자동입력·파일추가): `...\14.수질성적서\0.입력중` (WATER_REPORT_INPUT)
 - 대기 PDF 저장 기본 경로: `\\192.168.10.163\측정팀\2.성적서\0.PDF\2.대기pdf` (PDF_AIR)
-- 수질 PDF 저장 기본 경로: `\\192.168.10.163\측정팀\2.성적서\0.PDF\1.수질pdf` (PDF_WATER)
+- 수질 PDF 병합 저장: `\\192.168.10.163\측정팀\2.성적서\0.PDF\1.수질pdf` (PDF_WATER) — 하위 `{연도}년\{대행기록부 D3 공백제거}\`
+- 수질 대행기록부만: `\\192.168.10.163\scan\PDF` (WATER_RECORD_PDF_DIR, 없으면 자동 생성)
+- 수질 매크로 엑셀: `WATER_TAB4_MACRO_FILE`
 - 최종완료 경로: `\\192.168.10.163\측정팀\2.성적서\0 5.최종완료` (REPORT_DONE)
 - 수분량 저장 경로: `\\192.168.10.163\측정팀\2.성적서\0.수분량` (MOISTURE_ROOT)
 - THC 저장 경로: `\\192.168.10.163\측정팀\2.성적서\0.THC` (THC_ROOT)
@@ -383,7 +506,8 @@ NAS 저장
 
 예시:
 
-- `A2604181-03`
+- `A2604181-03` (대기)
+- `W2606300-01` (수질)
 
 의미:
 
@@ -411,12 +535,18 @@ NAS 저장
 
 ## 10. 초보자가 자주 헷갈리는 점
 
-### 10-1. GUI가 떠도 내부는 콘솔형 질문 흐름을 쓴다
+### 10-1. 자동입력 GUI와 콘솔 실행 방식이 다르다
 
-`eco_input.py`와 `eco_check.py`는 원래 `input()` 기반 콘솔 구조다.
-GUI 파일은 이 입력 흐름을 가로채서 미리 준비한 답변 배열을 넣는 방식으로 동작한다.
+**측정인 자동입력** (`eco_input_gui.py` → `eco_input.py`):
 
-그래서 질문 순서가 바뀌면 GUI도 같이 수정해야 한다.
+- GUI는 `_build_answers_air()` / `_build_answers_water()`가 만든 **dict**를 `_main_air()` / `_main_water()`에 **키워드 인자**로 넘긴다. (`fake_input` / `input()` 가로채기 없음)
+- GUI 종료 시 `input("엔터...")` 는 호출하지 않음 (`login_id` 전달 = gui_mode). 콘솔에서만 엔터 대기.
+- 콘솔에서 `eco_input.py`만 직접 실행하면 예전처럼 `input()`·`ask_yesno()` 순서로 질문한다.
+- GUI에서 체크박스 순서를 바꿔도 로직에는 **bool 이름**만 전달되므로, 콘솔 질문 순서와는 무관하다. 옵션을 새로 추가·삭제할 때는 GUI dict와 `_main_*()` 인자를 함께 맞춘다.
+
+**측정인 검토** (`eco_check_gui.py` → `eco_check.py`):
+
+- 아직 `input()` 가로채기(fake input) 패턴을 쓴다. `eco_check.py` 질문 순서가 바뀌면 GUI answer 배열도 같이 수정해야 한다.
 
 ### 10-2. 드래그앤드롭은 선택 기능이다
 
@@ -467,24 +597,26 @@ PDF 생성, 표시값 복사, 백데이터 생성이 대표적이다.
 
 ### NAS 경로가 바뀌었을 때
 
-주로 아래 파일을 본다.
+**먼저** 프로그램 루트 `config.ini` 의 `[PATHS]` 를 수정한다. (없으면 `3.py/config.py` 기본값)
 
-- `eco_input.py`
-- `eco_check.py`
-- `backdata_utils.py`
-- `tab4_utils.py`
-- `receipt.py`
-- `dash.py`
+그다음 참고:
+
+- `eco_input.py`, `eco_check.py`, `backdata_utils.py`, `tab4_utils.py`, `water_input_utils.py`
+- `receipt.py`, `dash.py`
+
+수질 전용 키: `WATER_REPORT_*`, `PDF_WATER`, `WATER_RECORD_PDF_DIR`, `WATER_TAB4_*`
 
 ### 측정인.kr 사이트 구조가 바뀌었을 때
 
 주로 아래 파일을 본다.
 
 - `measin_constants.py`
-- `eco_input.py`
+- `eco_input.py`, `water_input_utils.py` (수질 탭·PDF input id)
 - `eco_check.py`
 - `tab4_utils.py`
 - `selenium_utils.py`
+
+수질 PDF input id: `config.ini` → `WATER_TAB4_FILE1` / `WATER_TAB4_FILE2` 및 `eco_input.py` `WATER_FILE_BTN1/2`
 
 ### 엑셀 시트명이 바뀌었을 때
 
@@ -506,16 +638,30 @@ PDF 생성, 표시값 복사, 백데이터 생성이 대표적이다.
 | `readme.md` | 처음 사용하는 사람을 위한 전체 안내 |
 | `파일별_설명.md` | 개발자/유지보수 담당자를 위한 파일별 상세 설명 |
 | `모듈화_분석.md` | 리팩터링 및 모듈화 작업 기록 |
-| `버전노트.txt` | 버전별 변경 이력 |
+| `버전노트.txt` | 버전별 변경 이력 (도구별·런처별) |
+
+### 버전노트는 이렇게 쓴다
+
+예전에는 `.bat` 파일 이름에 버전(`V2.9` 등)을 붙였다. 런처 통합 이후에는 아래처럼 나누어 `버전노트.txt`에만 기록한다.
+
+| 구분 | 기록 예시 | 언제 쓰나 |
+|------|-----------|-----------|
+| **통합 런처** | `0.검토 및 입력프로그램` | 런처 UI, 실행 방식, 진입점 변경 |
+| **개별 도구** | `1.측정인 자동입력 V2.10` | `eco_input.py` 등 해당 도구 로직 변경 |
+| **설치** | `0.처음사용시` (필요 시) | 패키지·드라이버·보안 설정 변경 |
+
+- **파일 이름에는 버전을 붙이지 않는다.** (`eco_input_gui.py` 그대로)
+- **버전 번호는 `버전노트.txt` 한 곳에서만 올린다.**
+- 한 번에 여러 도구를 고쳤으면 도구마다 줄을 나눠 적는다.
+- 런처만 고친 날은 개별 도구 버전을 올릴 필요 없다.
 
 ---
 
 ## 14. 빠르게 기억해야 할 핵심만 정리
 
 - 처음 PC면 `0.처음사용시`의 통합 설치부터 실행
-- 실행은 `.bat` 파일을 더블클릭
-- 자동입력은 `1.측정인 자동입력 V2.9.bat`
-- 성적서 검토는 `5.성적서 검토 V2.8.bat`
-- 경로/IP 변경은 `config.ini` 파일에서 한 번에 수정 가능
+- 실행은 **`2.검토 및 입력프로그램.pyw`** 더블클릭 → 원하는 버튼 선택
+- 자동입력·성적서 검토 등은 런처 버튼으로 실행
+- 경로/IP 변경은 루트의 `config.ini` 파일에서 한 번에 수정 가능
 - 에러는 먼저 공용 로그와 GUI 로그창 확인
 - 백데이터는 측정 종료 전이면 일부러 생성되지 않음

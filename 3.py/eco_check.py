@@ -38,6 +38,7 @@ from measin_utils import (
 from excel_utils import find_sheet_by_candidates, parse_measuring_record
 from realgrid_utils import rg_api_read_data
 from log_utils import log_error
+from cancel_utils import is_cancelled
 from config import MEASIN_REVIEW, MEASIN_PDF_DIR
 from measin_constants import (
     SKIP_VOL_AND_SPEED, SKIP_SPEED_ONLY, DUST_SKIP_FIELDS,
@@ -1137,12 +1138,24 @@ def main(progress_callback=None, cancel_event=None):
     excel_meta_map = {}  # 시료별 (날짜/업소/채취시간) 메타
 
     try:
+        if is_cancelled(cancel_event):
+            print("\n[취소됨] 작업을 중단합니다.")
+            return
+
         driver = init_driver()
+        if is_cancelled(cancel_event):
+            print("\n[취소됨] 작업을 중단합니다.")
+            try:
+                driver.quit()
+            except Exception:
+                pass
+            return
+
         login(driver, login_id, login_pw)
         search_date(driver, start_date, end_date)
 
         for sample_no in samples:
-            if cancel_event and cancel_event.is_set():
+            if is_cancelled(cancel_event):
                 print("\n[취소됨] 작업을 중단합니다.")
                 break
                 
@@ -1154,9 +1167,16 @@ def main(progress_callback=None, cancel_event=None):
             print(f" 시료({current_count}/{total_samples}):", sample_no)
             print("-------------------------------------------")
 
+            if is_cancelled(cancel_event):
+                print("\n[취소됨] 작업을 중단합니다.")
+                break
+
             # 상세페이지 진입
             if not open_sample_detail(driver, sample_no):
                 continue
+            if is_cancelled(cancel_event):
+                print("\n[취소됨] 작업을 중단합니다.")
+                break
             time.sleep(1)
             site = read_site_data(driver, sample_no)
             PDF_MAP[sample_no] = site.get("PDF경로", "")
@@ -1206,7 +1226,7 @@ def main(progress_callback=None, cancel_event=None):
             print(" 완료 : ", sample_no)
             go_back_to_list(driver)
 
-        if sample_rows:
+        if sample_rows and not is_cancelled(cancel_event):
             # teams가 여러 개인 경우 → 팀별로 파일을 따로 저장 (dash에서 여러 파일 선택해서 종합검토)
             if teams and len(teams) > 1:
                 base_dir = os.path.dirname(RESULT_XLSX)
@@ -1222,13 +1242,13 @@ def main(progress_callback=None, cancel_event=None):
                 save_results(sample_rows, RESULT_XLSX)
                 print(f"✅ 저장 완료: {RESULT_XLSX}")
         else:
-            if cancel_event and cancel_event.is_set():
+            if is_cancelled(cancel_event):
                 print("⚠ 취소되어 결과가 저장되지 않았습니다.")
             else:
                 print("⚠ 저장할 결과 없음")
 
     finally:
-        if cancel_event and cancel_event.is_set() and driver:
+        if is_cancelled(cancel_event) and driver:
             try:
                 driver.quit()
                 print("취소됨: 브라우저를 닫았습니다.")

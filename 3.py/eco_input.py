@@ -85,6 +85,18 @@ from tab4_utils import (
     tab4_temp_save, tab4_comp_save,
     TAB4_SELECTOR, TAB4_GRID_ROOT
 )
+from water_input_utils import (
+    read_water_tab4_from_macro_xlsm,
+    fill_water_tab2,
+    save_water_tab2,
+    fill_water_tab4_dates,
+    fill_water_tab4_grid,
+    save_water_tab4_temp,
+    save_water_tab4_complete,
+    open_water_tab4,
+    water_tab4_tab_clickable,
+    WATER_DETAIL_WAIT_SEL,
+)
 
 # =====================================================================
 # 설정
@@ -93,10 +105,13 @@ from config import (
     REPORT_DONE,
     PDF_AIR,
     WATER_REPORT_BASE,
+    WATER_REPORT_INPUT,
     PDF_WATER,
+    WATER_RECORD_PDF_DIR,
     PDF_TMP_DIR,
     FIELD_URL_WATER,
 )
+from cancel_utils import is_cancelled
 
 #===============================팝업닫기========================
 
@@ -111,13 +126,13 @@ FINAL_DONE_DIR = REPORT_DONE
 PDF_BASE_DIR   = PDF_AIR
 
 # ── 수질 ──────────────────────────────────────────────────
-# 수질 성적서: NAS_BASE_WATER\YYYY년\업체명\파일.xlsm
-NAS_BASE_WATER     = WATER_REPORT_BASE
-# 수질 PDF:    PDF_BASE_DIR_WATER\YYYY년\업체명\파일.pdf
+# 수질 성적서 NAS 검색: 0.입력중 (파일추가 대화상자와 동일)
+NAS_BASE_WATER     = WATER_REPORT_INPUT
+# 수질 PDF 병합: PDF_BASE_DIR_WATER\YYYY년\{대행기록부 D3 공백제거}\엑셀파일명.pdf
 PDF_BASE_DIR_WATER = PDF_WATER
-# 수질 탭4 PDF 업로드 셀렉터
-WATER_FILE_BTN1    = "#anzeFile1"   # 분석일지
-WATER_FILE_BTN2    = "#anzeFile2"   # 대행기록부
+# 수질 탭4 PDF 업로드 (대기 탭4 #newFile1/2 와 별도 id)
+WATER_FILE_BTN1 = "#anzeFile1"   # 시험분석일지
+WATER_FILE_BTN2 = "#anzeFile2"   # 측정기록부
 # 수질 엑셀 시트명
 WATER_SHEET_ANALY  = "분석일지"
 WATER_SHEET_RECORD = "대행기록부"
@@ -214,7 +229,8 @@ def find_sample_file_in_nas(sample_no: str):
 
 def find_sample_file_in_water_nas(sample_no: str):
     """수질 NAS에서 엑셀 파일 검색.
-    경로 구조: NAS_BASE_WATER\YYYY년\업체명\파일.xlsm  (하위 전체 재귀)
+    경로: WATER_REPORT_INPUT (…\\14.수질성적서\\0.입력중) 하위 재귀
+    파일명 예: W2606300-01 문의휴게소.xlsm
     """
     return _find_best_file_util(
         sample_no,
@@ -283,9 +299,9 @@ def extract_samples_from_nas(team_nos, date_str): # 파라미터 이름 변경
 # 사이트 상세 진입 – 시료번호 검색 방식
 # =====================================================================
 
-def open_detail_by_sample(d, sample_no):
+def open_detail_by_sample(d, sample_no, detail_wait_sel="#machineDiv"):
     """measin_utils.open_sample_detail 래퍼 (eco_input 호환성 유지)"""
-    return _open_sample_detail(d, sample_no)
+    return _open_sample_detail(d, sample_no, detail_wait_sel=detail_wait_sel)
 
 def back_to_list(d, btn_selector="#btnMsFieldDocCancel"):
     """measin_utils.go_back_to_list 래퍼 (eco_input 호환성 유지)"""
@@ -329,11 +345,12 @@ def open_detail_with_session_recovery(
     date_str=None,
     field_url=FIELD_URL,
     max_recover=5,
+    detail_wait_sel="#machineDiv",
 ):
     """상세 진입 실패 시 목록 검색창이 없으면 재로그인 후 같은 시료부터 재시도."""
     recover_count = 0
     while True:
-        if open_detail_by_sample(driver, sample_no):
+        if open_detail_by_sample(driver, sample_no, detail_wait_sel=detail_wait_sel):
             return True
 
         if _is_field_list_ready(driver):
@@ -999,11 +1016,51 @@ def trigger_file_dialog(driver, timeout=6):
         return False
         
         
+def _read_excel_cell_com(excel_path: str, sheet_name: str, addr: str) -> str:
+    """.xls — openpyxl 미지원, Excel COM으로 셀 읽기 (PDF·업체명 등)."""
+    excel = get_excel_app()
+    wb = None
+    try:
+        wb = excel.Workbooks.Open(excel_path, ReadOnly=True, UpdateLinks=0)
+        try:
+            ws = wb.Worksheets(sheet_name)
+        except Exception:
+            ws = wb.Worksheets(1)
+        try:
+            v = ws.Range(addr).Text
+        except Exception:
+            v = ws.Range(addr).Value
+        return "" if v is None else str(v).strip()
+    finally:
+        try:
+            if wb is not None:
+                wb.Close(SaveChanges=False)
+        except Exception:
+            pass
+
+
 def read_input_h7(excel_path: str) -> str:
+    """입력 시트 H7 (업체명). .xlsx/.xlsm=openpyxl, .xls=COM."""
+    if os.path.splitext(excel_path)[1].lower() == ".xls":
+        return _read_excel_cell_com(excel_path, "입력", "H7")
     wb = load_workbook(excel_path, data_only=True)
     ws = wb["입력"] if "입력" in wb.sheetnames else wb[wb.sheetnames[0]]
     v = ws["H7"].value
     return "" if v is None else str(v).strip()
+
+
+def read_water_record_d3(excel_path: str) -> str:
+    """수질 PDF 하위 폴더명: 대행기록부 시트 D3 (공백 제거)."""
+    if os.path.splitext(excel_path)[1].lower() == ".xls":
+        raw = _read_excel_cell_com(excel_path, WATER_SHEET_RECORD, "D3")
+    else:
+        wb = load_workbook(excel_path, data_only=True)
+        ws = find_sheet_by_candidates(wb, [WATER_SHEET_RECORD])
+        if ws is None:
+            ws = wb[wb.sheetnames[0]]
+        v = ws["D3"].value
+        raw = "" if v is None else str(v)
+    return re.sub(r"\s+", "", str(raw).strip())
 
 # ------------------------------------------------------------
 # 🔽 PDF 최종본 저장
@@ -1037,13 +1094,19 @@ def build_final_paths(excel_path: str, sample_no: str):
     return os.path.join(p1_dir, out_name), os.path.join(p2_dir, out_name)
 
 
+def build_water_record_copy_path(excel_path: str) -> str:
+    """대행기록부 PDF만 \\\\NAS\\scan\\PDF 에 저장 (폴더 없으면 생성, 파일명=성적서 엑셀명.pdf)."""
+    os.makedirs(WATER_RECORD_PDF_DIR, exist_ok=True)
+    base_name = os.path.splitext(os.path.basename(excel_path))[0]
+    return os.path.join(WATER_RECORD_PDF_DIR, f"{base_name}.pdf")
+
+
 def build_final_path_water(excel_path: str, sample_no: str) -> str:
     """수질 PDF 최종 저장 경로.
-    → PDF_BASE_DIR_WATER\YYYY년\업체명\파일명.pdf
-    업체명은 엑셀 H7 셀 값(read_input_h7) 사용.
+    → PDF_BASE_DIR_WATER\YYYY년\{대행기록부 D3, 공백제거}\파일명.pdf
     """
     yyyy_full = f"20{sample_no[1:3]}"        # "26" → "2026"
-    company   = read_input_h7(excel_path)    # 엑셀 H7 = 업체명
+    company   = read_water_record_d3(excel_path)
     out_dir   = os.path.join(PDF_BASE_DIR_WATER, f"{yyyy_full}년", company)
     os.makedirs(out_dir, exist_ok=True)
     base_name = os.path.splitext(os.path.basename(excel_path))[0]
@@ -1052,8 +1115,8 @@ def build_final_path_water(excel_path: str, sample_no: str) -> str:
 
 def make_tab4_pdfs_water(excel_path: str, sample_no: str) -> dict:
     """수질 탭4 PDF 생성 + 최종본 저장.
-    업1(anzeFile1): 분석일지 단독
-    업2(anzeFile2): 대행기록부 단독
+    업1(#anzeFile1): 시험분석일지 시트 PDF
+    업2(#anzeFile2): 측정기록부 시트 PDF
     최종본: 두 시트 병합 → build_final_path_water()
     """
     tmp_dir = PDF_TMP_DIR
@@ -1074,11 +1137,16 @@ def make_tab4_pdfs_water(excel_path: str, sample_no: str) -> dict:
     p_out = build_final_path_water(excel_path, sample_no)
     shutil.copy2(final_tmp, p_out)
 
+    p_record_copy = build_water_record_copy_path(excel_path)
+    if os.path.isfile(pdf_record):
+        shutil.copy2(pdf_record, p_record_copy)
+
     return {
         "final_tmp" : final_tmp,
         "pdf_analy" : pdf_analy,    # #anzeFile1 업로드용
         "pdf_record": pdf_record,   # #anzeFile2 업로드용
         "p_out"     : p_out,
+        "p_record_copy": p_record_copy,
     }
 
 
@@ -1160,24 +1228,87 @@ def wait_file_selected(driver, css_sel, timeout=5.0):
     return False
 
 
-def upload_tab4_pdfs(driver, pdf_analy_path: str, pdf_record_path: str,
-                     f1_sel: str = "#newFile1", f2_sel: str = "#newFile2"):
-    """탭4 PDF 업로드.  대기: #newFile1/2,  수질: #anzeFile1/2"""
+def _find_tab4_file_input(driver, selectors: list, timeout=12.0):
+    """탭4 PDF file input — 셀렉터 후보 순서대로 탐색(탭4 패널·스크롤)."""
+    end = time.time() + timeout
+    while time.time() < end:
+        for sel in selectors:
+            if not sel:
+                continue
+            try:
+                el = driver.find_element(By.CSS_SELECTOR, sel)
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center'});", el
+                )
+                time.sleep(0.15)
+                return sel, el
+            except Exception:
+                pass
+        # 탭4 패널 안 input#id (예: anzeFile1, newFile1)
+        try:
+            found = driver.execute_script(
+                r"""
+                const ids = arguments[0];
+                const tab = document.querySelector('a#ui-id-4');
+                let scope = document;
+                if (tab && tab.getAttribute('href') && tab.getAttribute('href').charAt(0) === '#') {
+                    const p = document.querySelector(tab.getAttribute('href'));
+                    if (p) scope = p;
+                }
+                for (const id of ids) {
+                    const el = scope.querySelector('input#' + id.replace('#',''))
+                        || document.querySelector('input#' + id.replace('#',''));
+                    if (el) return id;
+                }
+                return null;
+                """,
+                [s.lstrip("#") for s in selectors],
+            )
+            if found:
+                sel = found if found.startswith("#") else f"#{found}"
+                el = driver.find_element(By.CSS_SELECTOR, sel)
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center'});", el
+                )
+                time.sleep(0.15)
+                return sel, el
+        except Exception:
+            pass
+        time.sleep(0.35)
+    return None, None
 
-    f1 = driver.find_element(By.CSS_SELECTOR, f1_sel)
-    f2 = driver.find_element(By.CSS_SELECTOR, f2_sel)
+
+def upload_tab4_pdfs(driver, pdf_analy_path: str, pdf_record_path: str,
+                     f1_sel: str = "#newFile1", f2_sel: str = "#newFile2",
+                     f1_alts: list | None = None, f2_alts: list | None = None):
+    """탭4 PDF 업로드. 기본값=대기(#newFile1/2), 수질은 f1_sel/f2_sel로 #anzeFile1/2."""
+
+    f1_candidates = [f1_sel] + [s for s in (f1_alts or []) if s and s != f1_sel]
+    f2_candidates = [f2_sel] + [s for s in (f2_alts or []) if s and s != f2_sel]
+
+    f1_sel_ok, f1 = _find_tab4_file_input(driver, f1_candidates)
+    if not f1:
+        raise RuntimeError(
+            f"탭4 PDF 파일1 input 없음 (시도: {', '.join(f1_candidates)})"
+        )
+    f2_sel_ok, f2 = _find_tab4_file_input(driver, f2_candidates)
+    if not f2:
+        raise RuntimeError(
+            f"탭4 PDF 파일2 input 없음 (시도: {', '.join(f2_candidates)})"
+        )
+    print(f"   ↳ PDF 업로드 input: {f1_sel_ok}, {f2_sel_ok}")
 
     driver.execute_script("arguments[0].style.display='block'; arguments[0].style.visibility='visible';", f1)
     driver.execute_script("arguments[0].style.display='block'; arguments[0].style.visibility='visible';", f2)
 
     # 1) 파일 선택(트리거: onchange)
     f1.send_keys(pdf_analy_path)
-    if not wait_file_selected(driver, f1_sel, timeout=5.0):
-        raise RuntimeError("⚠탭4 파일1 선택 확인 실패(newFile1)")
+    if not wait_file_selected(driver, f1_sel_ok, timeout=5.0):
+        raise RuntimeError(f"⚠탭4 파일1 선택 확인 실패({f1_sel_ok})")
 
     f2.send_keys(pdf_record_path)
-    if not wait_file_selected(driver, f2_sel, timeout=5.0):
-        raise RuntimeError("⚠탭4 파일2 선택 확인 실패(newFile2)")
+    if not wait_file_selected(driver, f2_sel_ok, timeout=5.0):
+        raise RuntimeError(f"⚠탭4 파일2 선택 확인 실패({f2_sel_ok})")
 
     # 2) setFile 처리 시간(서버 업로드/검증이 있을 수 있어 최소 대기)
     time.sleep(1.0)
@@ -1460,134 +1591,287 @@ def main(cancel_event=None):
 
 
 # ══════════════════════════════════════════════════════════════
-# 수질 흐름  ─  탭4(측정분석결과)만 입력
+# 수질 흐름  ─  field_water.do (탭2 + 탭4 + PDF)
 # ══════════════════════════════════════════════════════════════
-def _main_water(cancel_event=None):
-    """수질 흐름: 탭4 진입 → PDF 생성/업로드 → 저장만 수행 (그리드 입력 없음)"""
-    login_id = input("측정인 아이디: ").strip()
-    login_pw = input("측정인 비밀번호: ").strip()
+def _main_water(
+    cancel_event=None,
+    *,
+    login_id: str | None = None,
+    login_pw: str | None = None,
+    do_tab2: bool | None = None,
+    do_tab4: bool | None = None,
+    do_pdf_final: bool | None = None,
+    raw_samples: str | None = None,
+):
+    """
+    수질 자동입력 (https://측정인.kr/ms/field_water.do)
+    1) 날짜·시료번호 검색 → 상세
+    2) 탭2: 용기/용량/개수/측정위치 → 입력완료
+    3) 탭4: 매크로엑셀(26.05 수질) 날짜·RealGrid·PDF → 분석완료
+    성적서 NAS + PDF 병합 경로: PDF_WATER
 
-    raw = input("처리할 수질 시료번호 (쉼표/공백/줄바꿈 구분):\n").strip()
+    GUI 호출 시 login_id 등 키워드 인자로 전달 (input() 불필요).
+    """
+    print("=== 수질 자동 입력 시작 ===", flush=True)
+    print(f"▶ 성적서 검색 경로: {NAS_BASE_WATER}", flush=True)
+
+    if login_id is None:
+        login_id = input("측정인 아이디: ").strip()
+        login_pw = input("측정인 비밀번호: ").strip()
+        do_tab2 = ask_yesno("시료채취/측정정보(탭2) 입력할래? (예/아니오) [기본: 예]: ", default_yes=True)
+        do_tab4 = ask_yesno("측정분석결과(탭4) 입력할래? (예/아니오) [기본: 예]: ", default_yes=True)
+        do_pdf_final = ask_yesno(
+            "탭4 PDF 생성/업로드 할래? (예/아니오) [기본: 예]: ", default_yes=True
+        )
+    else:
+        login_id = str(login_id).strip()
+        login_pw = str(login_pw or "").strip()
+        do_tab2 = bool(do_tab2)
+        do_tab4 = bool(do_tab4)
+        do_pdf_final = bool(do_pdf_final)
+
+    if not do_tab4:
+        do_pdf_final = False
+
+    if not any([do_tab2, do_tab4]):
+        print("⚠ 실행할 항목이 없어 종료", flush=True)
+        return
+
+    if raw_samples is None:
+        raw = input("처리할 수질 시료번호 (쉼표/공백/줄바꿈 구분):\n").strip()
+    else:
+        raw = str(raw_samples).strip()
     target_samples = parse_sample_input(raw)
     if not target_samples:
-        print("⚠ 시료번호 없음 → 종료"); return
+        print("⚠ 시료번호 없음 → 종료")
+        return
 
-    # 수질 NAS에서 파일 찾기 (NAS_BASE_WATER\YYYY년\업체명\파일.xlsm)
     items = []
     for sn in target_samples:
         p = find_sample_file_in_water_nas(sn)
         if not p:
-            print(f"⚠ 수질 NAS에서 파일 못 찾음: {sn} → 스킵")
+            print(f"⚠ 수질 NAS에서 성적서 못 찾음: {sn} → 스킵")
             continue
         items.append({"sample": sn, "path": p})
 
     if not items:
-        print("⚠ 처리할 시료 없음 → 종료"); return
+        print("⚠ 처리할 시료 없음 → 종료", flush=True)
+        print(f"   (검색 폴더: {NAS_BASE_WATER})", flush=True)
+        return
 
-    print(f"총 {len(items)}개 수질 시료 처리 예정")
+    print(f"총 {len(items)}개 수질 시료 처리 예정", flush=True)
 
-    do_pdf_final = ask_yesno("PDF 생성/업로드까지 할래? (예/아니오) [기본: 예]: ", default_yes=True)
+    if is_cancelled(cancel_event):
+        print("\n[취소됨] 사용자에 의해 작업을 중단합니다.", flush=True)
+        return
 
-    # 드라이버 시작 + 수질 사이트 로그인
+    print("▶ Chrome 드라이버 준비 중...", flush=True)
     driver = init_driver()
+    if is_cancelled(cancel_event):
+        print("\n[취소됨] 사용자에 의해 작업을 중단합니다.")
+        try:
+            driver.quit()
+        except Exception:
+            pass
+        return
+
+    print("▶ 측정인 로그인·수질 목록 이동...", flush=True)
     login(driver, login_id, login_pw, field_url=FIELD_URL_WATER)
 
     idx = 0
     while idx < len(items):
-        if cancel_event and cancel_event.is_set():
+        if is_cancelled(cancel_event):
             print("\n[취소됨] 사용자에 의해 작업을 중단합니다.")
             break
-            
+
         item = items[idx]
         sample = item["sample"]
-        path   = item["path"]
+        path = item["path"]
+        date_str = sample_to_datestr(sample)
 
         print(f"\n{'='*51}")
         print(f"▶ 수질 시료: {sample}")
         print(f"{'='*51}")
 
+        if is_cancelled(cancel_event):
+            break
+
+        if date_str:
+            search_date(driver, date_str, date_str)
+
         if not open_detail_with_session_recovery(
-            driver, sample, login_id, login_pw, field_url=FIELD_URL_WATER
+            driver,
+            sample,
+            login_id,
+            login_pw,
+            date_str=date_str,
+            field_url=FIELD_URL_WATER,
+            detail_wait_sel=WATER_DETAIL_WAIT_SEL,
         ):
             print("❌ 상세페이지 진입 실패 → 다음 시료로")
             idx += 1
             continue
 
-        # 탭4 클릭 + 로딩 대기
-        safe_click(driver, TAB4_SELECTOR)
-        wait_el(driver, "#smpl_rcpt_dt", timeout=10)
+        if is_cancelled(cancel_event):
+            break
 
-        pdfs = None
-        if do_pdf_final:
-            print("▶ PDF 생성/업로드중")
-            pdfs = make_tab4_pdfs_water(path, sample)
-            upload_tab4_pdfs(
-                driver,
-                pdfs["pdf_analy"],
-                pdfs["pdf_record"],
-                f1_sel=WATER_FILE_BTN1,
-                f2_sel=WATER_FILE_BTN2,
-            )
-            tab4_comp_save(driver)
-            print(f"✅ 완료  →  {pdfs['p_out']}")
+        # ── 탭2 (측정분석결과 #ui-id-4 는 탭2 입력완료 후에만 활성) ──
+        if do_tab2:
+            fill_water_tab2(driver)
+            if not save_water_tab2(driver):
+                print("⚠ 수질 탭2 입력완료 저장 실패")
+                if do_tab4:
+                    print("❌ 탭2 미완료 → 탭4 불가, 다음 시료로")
+                    idx += 1
+                    continue
+        elif do_tab4 and not water_tab4_tab_clickable(driver):
+            print("▶ 수질 탭4 선택 — 탭2 미완료로 탭4 비활성 → 탭2 입력완료 선행")
+            fill_water_tab2(driver)
+            if not save_water_tab2(driver):
+                print("❌ 탭2 입력완료 실패 → 탭4 불가, 다음 시료로")
+                idx += 1
+                continue
+        elif do_tab4:
+            print("▶ 수질 탭2 스킵 (탭2 완료된 상태로 탭4만 진행)")
         else:
-            tab4_temp_save(driver)
-            print("  임시저장")
+            print("▶ 수질 탭2 스킵")
 
-        if pdfs:
-            cleanup_tmp_pdfs(PDF_TMP_DIR, sample)
+        # ── 탭4 ──
+        pdfs = None
+        if do_tab4:
+            if not open_water_tab4(driver):
+                print("❌ 수질 탭4 진입 실패 → 다음 시료로")
+                idx += 1
+                continue
+
+            print("▶ 수질 탭4 매크로 엑셀 읽는중")
+            tab4_meta = read_water_tab4_from_macro_xlsm(sample)
+            print("✅ 수질 탭4 데이터 읽기 완료")
+
+            fill_water_tab4_dates(driver, tab4_meta)
+            time.sleep(0.5)
+            fill_water_tab4_grid(driver, tab4_meta)
+
+            if do_pdf_final:
+                print("▶ 수질 PDF 생성/업로드중")
+                open_water_tab4(driver)
+                pdfs = make_tab4_pdfs_water(path, sample)
+                upload_tab4_pdfs(
+                    driver,
+                    pdfs["pdf_analy"],
+                    pdfs["pdf_record"],
+                    f1_sel=WATER_FILE_BTN1,
+                    f2_sel=WATER_FILE_BTN2,
+                )
+                if save_water_tab4_complete(driver):
+                    print(f"✅ 수질 탭4 분석완료 → {pdfs['p_out']}")
+                    if pdfs.get("p_record_copy"):
+                        print(f"   ↳ 대행기록부 PDF → {pdfs['p_record_copy']}")
+                else:
+                    print("⚠ 수질 탭4 분석완료 저장 실패")
+            else:
+                # 탭4만 선택 시 임시저장 (PDF 없으면 분석완료 버튼 사용 안 함)
+                save_water_tab4_temp(driver)
+
+            if pdfs:
+                cleanup_tmp_pdfs(PDF_TMP_DIR, sample)
+        else:
+            print("▶ 수질 탭4 스킵")
 
         back_to_list(driver)
         idx += 1
 
-    if cancel_event and cancel_event.is_set():
+    if is_cancelled(cancel_event):
         if driver:
             try:
                 driver.quit()
-            except:
+            except Exception:
                 pass
         return
 
     print("\n=== 수질 처리 완료 ===")
-    try:
-        input("엔터 누르면 종료...")
-    except EOFError:
-        pass
+    gui_mode = login_id is not None
+    if not gui_mode:
+        try:
+            input("엔터 누르면 종료...")
+        except (EOFError, RuntimeError):
+            pass
 
 
 # ══════════════════════════════════════════════════════════════
 # 대기 흐름  ─  기존 그대로
 # ══════════════════════════════════════════════════════════════
-def _main_air(cancel_event=None):
-    job = input("작업 선택 (1=측정인 입력/저장/PDF/백데이터 / 2=백데이터만(로그인X)) [기본:1]: ").strip() or "1"
+def _main_air(
+    cancel_event=None,
+    *,
+    job: str | None = None,
+    login_id: str | None = None,
+    login_pw: str | None = None,
+    mode: str | None = None,
+    do_tab1: bool | None = None,
+    do_tab2: bool | None = None,
+    do_pdf_upload: bool | None = None,
+    do_backdata: bool | None = None,
+    do_tab4: bool | None = None,
+    do_pdf_final: bool | None = None,
+    raw_samples: str | None = None,
+    team_no: str | None = None,
+    date_str: str | None = None,
+):
+    """대기 자동입력. GUI는 키워드 인자로 전달(input 우회)."""
+    gui_mode = job is not None
+    print("=== 대기 자동 입력 시작 ===", flush=True)
 
-    login_id = ""
-    login_pw = ""
-    if job == "1":
-        login_id = input("측정인 아이디: ").strip()
-        login_pw = input("측정인 비밀번호: ").strip()
-
-    mode = input("모드 선택 (1=시료번호 직접입력 / 2=팀+날짜 자동추출) [기본:2]: ").strip() or "2"
-
-    do_tab1       = ask_yesno("현장측정정보(탭1) 입력할래? (예/아니오) [기본: 예]: ",          default_yes=True)
-    do_tab2       = ask_yesno("시료채취/측정정보(탭2) 입력할래? (예/아니오) [기본: 예]: ",      default_yes=True)
-    do_pdf_upload = ask_yesno("탭2 PDF 생성/업로드까지 할래? (예/아니오) [기본: 예]: ",        default_yes=True)
-    do_backdata   = ask_yesno("백데이터(수분 CSV + THC CSV/FID)? (예/아니오) [기본: 예]: ",   default_yes=True)
-    do_tab4       = ask_yesno("측정분석결과(탭4) 입력할래? (예/아니오) [기본: 아니오]: ",      default_yes=False)
-    do_pdf_final  = ask_yesno("PDF최종본 생성(탭4용) 할래? (예/아니오) [기본: 아니오]: ",      default_yes=False)
+    if not gui_mode:
+        job = input(
+            "작업 선택 (1=측정인 입력/저장/PDF/백데이터 / 2=백데이터만(로그인X)) [기본:1]: "
+        ).strip() or "1"
+        login_id = ""
+        login_pw = ""
+        if job == "1":
+            login_id = input("측정인 아이디: ").strip()
+            login_pw = input("측정인 비밀번호: ").strip()
+        mode = input(
+            "모드 선택 (1=시료번호 직접입력 / 2=팀+날짜 자동추출) [기본:2]: "
+        ).strip() or "2"
+        do_tab1 = ask_yesno("현장측정정보(탭1) 입력할래? (예/아니오) [기본: 예]: ", default_yes=True)
+        do_tab2 = ask_yesno("시료채취/측정정보(탭2) 입력할래? (예/아니오) [기본: 예]: ", default_yes=True)
+        do_pdf_upload = ask_yesno("탭2 PDF 생성/업로드까지 할래? (예/아니오) [기본: 예]: ", default_yes=True)
+        do_backdata = ask_yesno("백데이터(수분 CSV + THC CSV/FID)? (예/아니오) [기본: 예]: ", default_yes=True)
+        do_tab4 = ask_yesno("측정분석결과(탭4) 입력할래? (예/아니오) [기본: 아니오]: ", default_yes=False)
+        do_pdf_final = ask_yesno("PDF최종본 생성(탭4용) 할래? (예/아니오) [기본: 아니오]: ", default_yes=False)
+    else:
+        job = str(job).strip() or "1"
+        login_id = str(login_id or "").strip()
+        login_pw = str(login_pw or "").strip()
+        mode = str(mode).strip() or "2"
+        do_tab1 = bool(do_tab1)
+        do_tab2 = bool(do_tab2)
+        do_pdf_upload = bool(do_pdf_upload)
+        do_backdata = bool(do_backdata)
+        do_tab4 = bool(do_tab4)
+        do_pdf_final = bool(do_pdf_final)
 
     if job == "2":
         do_tab1 = do_tab2 = do_pdf_upload = do_tab4 = do_pdf_final = False
         do_backdata = True
 
+    if not do_tab4:
+        do_pdf_final = False
+
     if not any([do_tab1, do_tab2, do_backdata, do_tab4]):
-        print("⚠ 실행할 항목이 없어 종료"); return
+        print("⚠ 실행할 항목이 없어 종료", flush=True)
+        return
 
     # 시료 목록 생성
     date_groups = {}
 
     if mode == "1":
-        raw = input("처리할 시료번호 입력 (쉼표/공백/줄바꿈 구분):\n").strip()
+        raw = (
+            str(raw_samples).strip()
+            if gui_mode
+            else input("처리할 시료번호 입력 (쉼표/공백/줄바꿈 구분):\n").strip()
+        )
         target_samples = parse_sample_input(raw)
         if not target_samples:
             print("⚠ 시료번호 없음 → 종료"); return
@@ -1608,9 +1892,13 @@ def _main_air(cancel_event=None):
         print(f"총 {total}개 시료(날짜 {len(date_groups)}개 그룹) 처리 예정")
 
     else:
-        team_input = input("팀 번호(쉼표 구분, 예: 1,3 / 미입력 시 전체): ").strip()
-        date_str = input("날짜(YYYY-MM-DD): ").strip()
-        
+        if gui_mode:
+            team_input = str(team_no or "").strip()
+            date_str = str(date_str or "").strip()
+        else:
+            team_input = input("팀 번호(쉼표 구분, 예: 1,3 / 미입력 시 전체): ").strip()
+            date_str = input("날짜(YYYY-MM-DD): ").strip()
+
         # 콤마로 구분된 팀 번호를 리스트로 파싱
         team_nos = [t.strip() for t in team_input.split(",")] if team_input else []
         
@@ -1628,13 +1916,27 @@ def _main_air(cancel_event=None):
     # 드라이버 / 로그인
     driver = None
     if job == "1":
+        if is_cancelled(cancel_event):
+            print("\n[취소됨] 사용자에 의해 작업을 중단합니다.")
+            return
         driver = init_driver()
+        if is_cancelled(cancel_event):
+            print("\n[취소됨] 사용자에 의해 작업을 중단합니다.")
+            try:
+                driver.quit()
+            except Exception:
+                pass
+            return
         login(driver, login_id, login_pw)
     else:
         print("▶ 백데이터만 모드 → 브라우저 스킵")
 
     # 날짜 그룹별 처리
     for date_str, day_samples in date_groups.items():
+        if is_cancelled(cancel_event):
+            print("\n[취소됨] 사용자에 의해 작업을 중단합니다.")
+            break
+
         print(f"\n{'='*51}")
         print(f"▶ 날짜 검색: {date_str}  | 대상 시료: {len(day_samples)}개")
         print(f"{'='*51}")
@@ -1650,7 +1952,7 @@ def _main_air(cancel_event=None):
         tab2_done_samples = set()
         idx = 0
         while idx < len(day_samples):
-            if cancel_event and cancel_event.is_set():
+            if is_cancelled(cancel_event):
                 print("\n[취소됨] 사용자에 의해 작업을 중단합니다.")
                 break
                 
@@ -1682,6 +1984,8 @@ def _main_air(cancel_event=None):
 
             need_detail = any([do_tab1, do_tab2, do_tab4])
             if need_detail:
+                if is_cancelled(cancel_event):
+                    break
                 if site_tab2_done:
                     print(f"▶ {sample} 탭2 저장/PDF 완료 → 탭4만 진행")
                 if not open_detail_with_session_recovery(
@@ -1702,6 +2006,8 @@ def _main_air(cancel_event=None):
 
             # 탭2
             if do_tab2 and not site_tab2_done:
+                if is_cancelled(cancel_event):
+                    break
                 safe_click(driver, "#ui-id-2")
                 fill_tab2(driver, excel, is_dust)
                 set_date_js(driver, SEL_DATE, date_str)
@@ -1761,6 +2067,8 @@ def _main_air(cancel_event=None):
 
             # 탭4
             if do_tab4:
+                if is_cancelled(cancel_event):
+                    break
                 safe_click(driver, TAB4_SELECTOR)
                 wait_el(driver, "#smpl_rcpt_dt", timeout=10)
 
@@ -1791,22 +2099,23 @@ def _main_air(cancel_event=None):
             back_to_list(driver)
             idx += 1
 
-        if cancel_event and cancel_event.is_set():
+        if is_cancelled(cancel_event):
             break
 
-    if cancel_event and cancel_event.is_set():
+    if is_cancelled(cancel_event):
         if driver:
             try:
                 driver.quit()
-            except:
+            except Exception:
                 pass
         return
 
-    print("\n=== 대기 처리 완료 ===")
-    try:
-        input("엔터 누르면 종료...")
-    except EOFError:
-        pass
+    print("\n=== 대기 처리 완료 ===", flush=True)
+    if not gui_mode:
+        try:
+            input("엔터 누르면 종료...")
+        except EOFError:
+            pass
 
 
 if __name__=="__main__":

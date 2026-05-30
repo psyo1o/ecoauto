@@ -158,8 +158,14 @@ def extract_sn_text(x) -> str:
     return m.group(0).upper() if m else ""
 
 
+# 파일명 시료번호: A/W + YYMMDD(6) + 팀(1) + -XX(2)  예) A2606301-01, W2606300-01
+_SAMPLE_NO_IN_NAME_RE = re.compile(
+    r"(?<![A-Z0-9])([AW]\d{7}-\d{2})(?!\d)", re.IGNORECASE
+)
+
+
 def extract_sample_from_name(path_or_text: str) -> str:
-    """파일명/폴더명/텍스트에서 시료번호 추출"""
+    """파일명/폴더명/텍스트에서 시료번호 추출 (대기 A, 수질 W)"""
     s = str(path_or_text or "").strip().upper()
     if not s:
         return ""
@@ -172,9 +178,9 @@ def extract_sample_from_name(path_or_text: str) -> str:
     stem = re.sub(r"\.[^.]+$", "", base)
     compact = re.sub(r"\s+", "", stem)
 
-    m = re.search(r"(?<![A-Z0-9])(A\d{7}-\d{2})(?!\d)", compact)
+    m = _SAMPLE_NO_IN_NAME_RE.search(compact)
     if m:
-        return m.group(1)
+        return m.group(1).upper()
 
     return ""
 

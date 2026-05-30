@@ -3,7 +3,7 @@
 측정인 자동 입력 및 백데이터 GUI
 - 매체(대기/수질) 선택에 따라 UI 동적 전환
 - 대기: 기존 탭1/2/백데이터/탭4 흐름
-- 수질: 시료번호 + 탭4만
+- 수질: 탭2 + 탭4(RealGrid·PDF)
 """
 
 import datetime
@@ -14,7 +14,6 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox
 import threading
-import builtins
 import warnings
 
 warnings.filterwarnings(
@@ -48,6 +47,8 @@ except Exception:
 # ------------------------------
 from gui_common import LogPanel, set_state_recursive
 from data_utils import extract_sample_from_name as common_extract_sample_from_name, parse_ymd_date
+from config import REPORT_BASE, WATER_REPORT_INPUT
+import sys
 
 
 def _parse_drop_files(data: str):
@@ -106,8 +107,9 @@ class EcoInputGUI:
     # ──────────────────────────────────────────────
     def _setup_window(self):
         self.root.title("측정인 자동 입력 및 백데이터")
-        self.root.geometry("860x1030")
-        self.root.minsize(860, 930)
+        # 콘텐츠 높이에 맞춘 기본 크기 (하단 빈 공간·버튼 잘림 방지)
+        self.root.geometry("860x820")
+        self.root.minsize(860, 720)
         self.root.resizable(True, True)
 
     def _create_widgets(self):
@@ -117,13 +119,16 @@ class EcoInputGUI:
         outer.grid_columnconfigure(1, weight=1, uniform="col")
         outer.grid_rowconfigure(0, weight=1)
 
-        self.input_frame = ttk.Frame(outer, padding=15)
+        self.input_frame = ttk.Frame(outer, padding=8)
         self.input_frame.grid(row=0, column=0, sticky="nsew")
         self.input_frame.grid_columnconfigure(1, weight=1)
+        # 하단: 진행바·시작 버튼 고정, 위쪽만 필요 시 늘어남
+        self.input_frame.grid_rowconfigure(8, weight=0)
+        self.input_frame.grid_rowconfigure(9, weight=0)
 
         self._create_input_area()
 
-        log_pane = ttk.Frame(outer, padding=(0, 15, 15, 15))
+        log_pane = ttk.Frame(outer, padding=(0, 8, 8, 8))
         log_pane.grid(row=0, column=1, sticky="nsew")
         log_pane.grid_rowconfigure(0, weight=1)
         log_pane.grid_columnconfigure(0, weight=1)
@@ -141,25 +146,25 @@ class EcoInputGUI:
     def _create_media_selection(self):
         self.media_var = tk.StringVar(value="1")
 
-        f = ttk.LabelFrame(self.input_frame, text="매체 선택", padding=10)
-        f.grid(row=0, column=0, columnspan=2, sticky="we", pady=8)
+        f = ttk.LabelFrame(self.input_frame, text="매체 선택", padding=6)
+        f.grid(row=0, column=0, columnspan=2, sticky="we", pady=(0, 4))
 
         ttk.Radiobutton(f, text="대기", value="1",
                         variable=self.media_var).grid(row=0, column=0, sticky="w", padx=10)
-        ttk.Radiobutton(f, text="수질 (탭4만)", value="2",
+        ttk.Radiobutton(f, text="수질", value="2",
                         variable=self.media_var).grid(row=0, column=1, sticky="w", padx=10)
 
     # ── 로그인 (공통) ──────────────────────────────
     def _create_login_fields(self):
         ttk.Label(self.input_frame, text="측정인 아이디:").grid(
-            row=1, column=0, sticky="e", pady=5)
+            row=1, column=0, sticky="e", pady=2)
         self.entry_id = ttk.Entry(self.input_frame, width=38)
-        self.entry_id.grid(row=1, column=1, sticky="we")
+        self.entry_id.grid(row=1, column=1, sticky="we", pady=2)
 
         ttk.Label(self.input_frame, text="비밀번호:").grid(
-            row=2, column=0, sticky="e", pady=5)
+            row=2, column=0, sticky="e", pady=2)
         self.entry_pw = ttk.Entry(self.input_frame, width=38, show="*")
-        self.entry_pw.grid(row=2, column=1, sticky="we")
+        self.entry_pw.grid(row=2, column=1, sticky="we", pady=2)
 
     # ── 대기 전용 영역 ─────────────────────────────
     def _create_air_area(self):
@@ -168,7 +173,7 @@ class EcoInputGUI:
         self.mode_var = tk.StringVar(value="2")
 
         job_mode_frame = ttk.Frame(self.input_frame)
-        job_mode_frame.grid(row=3, column=0, columnspan=2, sticky="we", pady=4)
+        job_mode_frame.grid(row=3, column=0, columnspan=2, sticky="we", pady=2)
         job_mode_frame.grid_columnconfigure(0, weight=1)
         job_mode_frame.grid_columnconfigure(1, weight=1)
 
@@ -198,38 +203,41 @@ class EcoInputGUI:
         self.tab4_var      = tk.BooleanVar(value=False)
         self.pdf_final_var = tk.BooleanVar(value=False)
 
-        self.air_feat_frame = ttk.LabelFrame(self.input_frame, text="입력/부가기능 선택", padding=10)
-        self.air_feat_frame.grid(row=4, column=0, columnspan=2, sticky="we", pady=4)
+        self.air_feat_frame = ttk.LabelFrame(self.input_frame, text="입력/부가기능 선택", padding=6)
+        self.air_feat_frame.grid(row=4, column=0, columnspan=2, sticky="we", pady=2)
+        self.air_feat_frame.grid_columnconfigure(0, weight=1)
+        self.air_feat_frame.grid_columnconfigure(1, weight=1)
 
-        self.chk_tab1 = ttk.Checkbutton(self.air_feat_frame,
-            text="현장측정정보 (탭1)", variable=self.tab1_var)
-        self.chk_tab1.grid(row=0, column=0, sticky="w", padx=5, pady=2)
+        # 1행: 탭1 | 백데이터  2행: 탭2 | 탭2 PDF  3행: 탭4 | 탭4 PDF
+        self.chk_tab1 = ttk.Checkbutton(
+            self.air_feat_frame, text="현장측정정보 (탭1)", variable=self.tab1_var)
+        self.chk_tab1.grid(row=0, column=0, sticky="w", padx=(4, 8), pady=1)
 
-        self.chk_tab2 = ttk.Checkbutton(self.air_feat_frame,
-            text="시료채취/측정정보 (탭2)", variable=self.tab2_var)
-        self.chk_tab2.grid(row=0, column=1, sticky="w", padx=5, pady=2)
+        self.chk_backdata = ttk.Checkbutton(
+            self.air_feat_frame, text="백데이터(수분/THC)", variable=self.backdata_var)
+        self.chk_backdata.grid(row=0, column=1, sticky="w", padx=4, pady=1)
 
-        self.chk_pdf = ttk.Checkbutton(self.air_feat_frame,
-            text="탭2 PDF 생성/업로드", variable=self.pdf_var)
-        self.chk_pdf.grid(row=1, column=0, sticky="w", padx=5, pady=2, columnspan=2)
+        self.chk_tab2 = ttk.Checkbutton(
+            self.air_feat_frame, text="시료채취/측정 (탭2)", variable=self.tab2_var)
+        self.chk_tab2.grid(row=1, column=0, sticky="w", padx=(4, 8), pady=1)
 
-        self.chk_backdata = ttk.Checkbutton(self.air_feat_frame,
-            text="백데이터(수분/THC)", variable=self.backdata_var)
-        self.chk_backdata.grid(row=2, column=0, sticky="w", padx=5, pady=2, columnspan=2)
+        self.chk_pdf = ttk.Checkbutton(
+            self.air_feat_frame, text="탭2 PDF", variable=self.pdf_var)
+        self.chk_pdf.grid(row=1, column=1, sticky="w", padx=4, pady=1)
 
-        self.chk_tab4 = ttk.Checkbutton(self.air_feat_frame,
-            text="측정분석결과 (탭4)", variable=self.tab4_var)
-        self.chk_tab4.grid(row=3, column=0, sticky="w", padx=5, pady=2, columnspan=2)
+        self.chk_tab4 = ttk.Checkbutton(
+            self.air_feat_frame, text="측정분석결과 (탭4)", variable=self.tab4_var)
+        self.chk_tab4.grid(row=2, column=0, sticky="w", padx=(4, 8), pady=1)
 
-        self.chk_pdf_final = ttk.Checkbutton(self.air_feat_frame,
-            text="탭4 PDF 최종본 생성/업로드", variable=self.pdf_final_var)
-        self.chk_pdf_final.grid(row=4, column=0, sticky="w", padx=5, pady=2, columnspan=2)
+        self.chk_pdf_final = ttk.Checkbutton(
+            self.air_feat_frame, text="탭4 PDF", variable=self.pdf_final_var)
+        self.chk_pdf_final.grid(row=2, column=1, sticky="w", padx=4, pady=1)
 
         # row 5: 모드2 입력 (팀+날짜)
-        self.team_date_frame = ttk.LabelFrame(self.input_frame, text="모드2: 팀+날짜", padding=10)
-        self.team_date_frame.grid(row=5, column=0, columnspan=2, sticky="we", pady=5)
-        
-        ttk.Label(self.team_date_frame, text="팀(미선택=전체):").grid(row=0, column=0, sticky="w", pady=3, padx=(0, 3))
+        self.team_date_frame = ttk.LabelFrame(self.input_frame, text="모드2: 팀+날짜", padding=6)
+        self.team_date_frame.grid(row=5, column=0, columnspan=2, sticky="we", pady=2)
+
+        ttk.Label(self.team_date_frame, text="팀(미선택=전체):").grid(row=0, column=0, sticky="w", pady=2, padx=(0, 3))
         
         # 체크박스를 담을 내부 프레임
         team_chk_frame = ttk.Frame(self.team_date_frame)
@@ -245,15 +253,15 @@ class EcoInputGUI:
             ).grid(row=0, column=i-1, padx=0)
             self.team_vars[i] = var
 
-        ttk.Label(self.team_date_frame, text="날짜 (YYYY-MM-DD):").grid(row=1, column=0, sticky="w", pady=5, padx=(0, 3))
+        ttk.Label(self.team_date_frame, text="날짜 (YYYY-MM-DD):").grid(row=1, column=0, sticky="w", pady=2, padx=(0, 3))
         self.entry_date = ttk.Entry(self.team_date_frame, width=15)
         self.entry_date.insert(0, datetime.date.today().strftime("%Y-%m-%d"))
         self.entry_date.grid(row=1, column=1, sticky="w")
 
         # row 6: 모드1 입력 (시료번호)
         self.air_direct_frame = ttk.LabelFrame(
-            self.input_frame, text="모드1: 대기 시료번호 입력", padding=10)
-        self.air_direct_frame.grid(row=6, column=0, columnspan=2, sticky="we", pady=4)
+            self.input_frame, text="모드1: 대기 시료번호 입력", padding=6)
+        self.air_direct_frame.grid(row=6, column=0, columnspan=2, sticky="we", pady=2)
         self.air_direct_frame.grid_columnconfigure(0, weight=1)
 
         self.lbl_hint_air = ttk.Label(self.air_direct_frame,
@@ -261,10 +269,10 @@ class EcoInputGUI:
                   foreground="gray")
         self.lbl_hint_air.grid(row=0, column=0, columnspan=2, sticky="w")
 
-        self.txt_samples_air = tk.Text(self.air_direct_frame, width=40, height=5,
+        self.txt_samples_air = tk.Text(self.air_direct_frame, width=40, height=3,
                                           relief="flat", highlightthickness=1,
                                           highlightbackground="black", highlightcolor="black")
-        self.txt_samples_air.grid(row=1, column=0, sticky="nsew", pady=5)
+        self.txt_samples_air.grid(row=1, column=0, sticky="nsew", pady=3)
 
         # 파일 추가/삭제/비우기 버튼 (오른쪽)
         air_btns = ttk.Frame(self.air_direct_frame)
@@ -281,15 +289,17 @@ class EcoInputGUI:
             anchor="center",
             relief="groove"
         )
-        self.lbl_drop_air.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 2), ipady=5)
+        self.lbl_drop_air.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 0), ipady=3)
 
     # ── 수질 전용 영역 ─────────────────────────────
     def _create_water_area(self):
-        self.water_pdf_final_var = tk.BooleanVar(value=False)
+        self.water_tab2_var = tk.BooleanVar(value=True)
+        self.water_tab4_var = tk.BooleanVar(value=True)
+        self.water_pdf_final_var = tk.BooleanVar(value=True)
 
         self.water_frame = ttk.LabelFrame(
-            self.input_frame, text="수질 시료번호 입력", padding=10)
-        self.water_frame.grid(row=7, column=0, columnspan=2, sticky="we", pady=4)
+            self.input_frame, text="수질 시료번호 입력", padding=6)
+        self.water_frame.grid(row=7, column=0, columnspan=2, sticky="we", pady=2)
         self.water_frame.grid_columnconfigure(0, weight=1)
 
         self.lbl_hint_water = ttk.Label(self.water_frame,
@@ -297,10 +307,10 @@ class EcoInputGUI:
                   foreground="gray")
         self.lbl_hint_water.grid(row=0, column=0, columnspan=2, sticky="w")
 
-        self.txt_samples_water = tk.Text(self.water_frame, width=40, height=5,
+        self.txt_samples_water = tk.Text(self.water_frame, width=40, height=3,
                                             relief="flat", highlightthickness=1,
                                             highlightbackground="black", highlightcolor="black")
-        self.txt_samples_water.grid(row=1, column=0, sticky="nsew", pady=5)
+        self.txt_samples_water.grid(row=1, column=0, sticky="nsew", pady=3)
 
         # 파일 추가/삭제/비우기 버튼 (오른쪽)
         water_btns = ttk.Frame(self.water_frame)
@@ -317,32 +327,42 @@ class EcoInputGUI:
             anchor="center",
             relief="groove"
         )
-        self.lbl_drop_water.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 5), ipady=5)
+        self.lbl_drop_water.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 0), ipady=3)
 
-        ttk.Label(self.water_frame,
-                  text="※ 수질은 탭4 PDF 생성/업로드만 수행합니다.",
-                  foreground="gray").grid(row=3, column=0, sticky="w", pady=2)
-
+        # 탭2·탭4·PDF 한 줄 배치 (세로 공간 절약)
         opt_frame = ttk.Frame(self.water_frame)
-        opt_frame.grid(row=4, column=0, sticky="w")
-        ttk.Checkbutton(opt_frame, text="PDF 생성/업로드 (탭4)",
-                        variable=self.water_pdf_final_var).grid(row=0, column=0, sticky="w", padx=5)
+        opt_frame.grid(row=3, column=0, columnspan=2, sticky="we", pady=(2, 0))
+
+        self.chk_water_tab2 = ttk.Checkbutton(
+            opt_frame, text="시험의뢰정보 (탭2)", variable=self.water_tab2_var)
+        self.chk_water_tab2.grid(row=0, column=0, sticky="w", padx=(0, 6))
+
+        self.chk_water_tab4 = ttk.Checkbutton(
+            opt_frame, text="측정분석결과 (탭4)", variable=self.water_tab4_var)
+        self.chk_water_tab4.grid(row=0, column=1, sticky="w", padx=(0, 6))
+
+        self.chk_water_pdf = ttk.Checkbutton(
+            opt_frame, text="탭4 PDF", variable=self.water_pdf_final_var)
+        self.chk_water_pdf.grid(row=0, column=2, sticky="w")
 
     def _create_progress_area(self):
         self.progress_bar = ttk.Progressbar(self.input_frame, mode="determinate")
-        self.progress_bar.grid(row=8, column=0, columnspan=2, sticky="ew", pady=5)
+        self.progress_bar.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(6, 2))
 
     def _create_action_button(self):
         btn_frame = ttk.Frame(self.input_frame)
-        btn_frame.grid(row=9, column=0, columnspan=2, pady=10)
+        btn_frame.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(8, 14))
+
+        btn_center = ttk.Frame(btn_frame)
+        btn_center.pack(anchor="center")
 
         self.start_btn = ttk.Button(
-            btn_frame, text="자동 입력 시작", command=self._on_start)
-        self.start_btn.pack(side="left", padx=5)
+            btn_center, text="자동 입력 시작", command=self._on_start)
+        self.start_btn.pack(side="left", padx=6)
 
         self.cancel_btn = ttk.Button(
-            btn_frame, text="취소", command=self._on_cancel, state="disabled")
-        self.cancel_btn.pack(side="left", padx=5)
+            btn_center, text="취소", command=self._on_cancel, state="disabled")
+        self.cancel_btn.pack(side="left", padx=6)
 
     def _on_cancel(self):
         if hasattr(self, 'cancel_event'):
@@ -353,7 +373,7 @@ class EcoInputGUI:
     def _create_log_area(self, parent):
         log_frame = ttk.LabelFrame(parent, text="로그", padding=10)
         log_frame.grid(row=0, column=0, sticky="nsew")
-        self.log_panel = LogPanel(log_frame, height=30)
+        self.log_panel = LogPanel(log_frame, height=22)
         self.log_panel.log_text.configure(width=30)
         self.log_panel.pack(fill="both", expand=True)
         self.log_panel.start_pumping()
@@ -382,6 +402,7 @@ class EcoInputGUI:
                     highlightbackground="black", highlightcolor="black",
                     bg="white", fg="black")
                 self.lbl_hint_water.configure(foreground="gray")
+                update_water_pdf_state()
             else:
                 set_state_recursive(self.water_frame, "disabled")
                 self.txt_samples_water.configure(
@@ -409,6 +430,13 @@ class EcoInputGUI:
             else:
                 self.pdf_final_var.set(False)
                 self.chk_pdf_final.configure(state="disabled")
+
+        def update_water_pdf_state(*_):
+            if self.water_tab4_var.get():
+                self.chk_water_pdf.configure(state="normal")
+            else:
+                self.water_pdf_final_var.set(False)
+                self.chk_water_pdf.configure(state="disabled")
 
         def update_mode_ui(*_):
             if self.mode_var.get() == "1":
@@ -450,6 +478,7 @@ class EcoInputGUI:
         self.media_var.trace_add("write", update_media)
         self.tab2_var.trace_add("write", update_pdf_state)
         self.tab4_var.trace_add("write", update_pdf_final_state)
+        self.water_tab4_var.trace_add("write", update_water_pdf_state)
         self.mode_var.trace_add("write", update_mode_ui)
         self.job_var.trace_add("write", update_job_ui)
 
@@ -493,18 +522,21 @@ class EcoInputGUI:
             messagebox.showerror("실패", f"설치 실패: {e}\n\n수동 설치: pip install tkinterdnd2", parent=self.root)
 
     def _add_files_air(self):
-        self._add_files_to_text(self.txt_samples_air)
+        self._add_files_to_text(self.txt_samples_air, initialdir=REPORT_BASE)
 
     def _add_files_water(self):
-        self._add_files_to_text(self.txt_samples_water)
+        self._add_files_to_text(self.txt_samples_water, initialdir=WATER_REPORT_INPUT)
 
-    def _add_files_to_text(self, text_widget):
+    def _add_files_to_text(self, text_widget, initialdir=None):
         from tkinter import filedialog
-        paths = filedialog.askopenfilenames(
+        dlg_kw = dict(
             title="성적서 엑셀 파일 선택",
             filetypes=[("Excel files", "*.xlsx;*.xlsm;*.xls"), ("All files", "*.*")],
-            parent=self.root
+            parent=self.root,
         )
+        if initialdir:
+            dlg_kw["initialdir"] = os.path.normpath(initialdir)
+        paths = filedialog.askopenfilenames(**dlg_kw)
         if not paths:
             return
         import eco_input as _eco
@@ -595,17 +627,41 @@ class EcoInputGUI:
         if not messagebox.askyesno("실행 확인", "지금 실행할까요?", parent=self.root):
             return
 
+        if self.media_var.get() == "2":
+            import eco_input as _eco
+            raw = self.txt_samples_water.get("1.0", "end").strip()
+            samples = _eco.parse_sample_input(raw)
+            missing = [
+                sn for sn in samples
+                if not _eco.find_sample_file_in_water_nas(sn)
+            ]
+            if missing:
+                preview = "\n".join(missing[:8])
+                if len(missing) > 8:
+                    preview += f"\n… 외 {len(missing) - 8}개"
+                if not messagebox.askyesno(
+                    "파일 없음",
+                    f"아래 시료는\n{WATER_REPORT_INPUT}\n에서 성적서를 찾지 못했습니다.\n\n{preview}\n\n그래도 실행할까요?",
+                    parent=self.root,
+                ):
+                    return
+
         self._run_automation(answers)
 
-    def _build_answers_water(self) -> list:
-        """수질 흐름 answers 구성.
-        main() → "2"
-        _main_water() 순서: login_id, login_pw, 시료번호, pdf(예/아니오)
-        """
+    def _build_answers_water(self) -> dict | None:
+        """수질 흐름 — _main_water()에 키워드로 직접 전달."""
         login_id = self.entry_id.get().strip()
         login_pw = self.entry_pw.get().strip()
         if not login_id or not login_pw:
             messagebox.showwarning("입력 오류", "아이디/비밀번호를 입력해 주세요.", parent=self.root)
+            return None
+
+        do_tab2 = self.water_tab2_var.get()
+        do_tab4 = self.water_tab4_var.get()
+        do_pdf = self.water_pdf_final_var.get() if do_tab4 else False
+        if not any([do_tab2, do_tab4]):
+            messagebox.showwarning(
+                "입력 오류", "수질 탭2 또는 탭4 중 최소 1개를 선택해 주세요.", parent=self.root)
             return None
 
         raw = self.txt_samples_water.get("1.0", "end").strip()
@@ -613,31 +669,30 @@ class EcoInputGUI:
             messagebox.showwarning("입력 오류", "수질 시료번호를 입력해 주세요.", parent=self.root)
             return None
 
-        return [
-            "2",                                        # 매체: 수질
-            login_id,
-            login_pw,
-            raw,                                        # 시료번호
-            self._yn(self.water_pdf_final_var),         # PDF 여부
-        ]
+        return {
+            "media": "2",
+            "login_id": login_id,
+            "login_pw": login_pw,
+            "do_tab2": do_tab2,
+            "do_tab4": do_tab4,
+            "do_pdf_final": do_pdf,
+            "raw_samples": raw,
+        }
 
-    def _build_answers_air(self) -> list:
-        """대기 흐름 answers 구성.
-        main() → "1"
-        _main_air() 순서: job, [id, pw], mode, tab1~pdf_final, [시료번호 or 팀+날짜]
-        """
-        job  = self.job_var.get()
+    def _build_answers_air(self) -> dict | None:
+        """대기 흐름 — _main_air()에 키워드로 직접 전달."""
+        job = self.job_var.get()
         mode = self.mode_var.get()
 
-        do_tab1      = self.tab1_var.get()
-        do_tab2      = self.tab2_var.get()
-        do_pdf       = self.pdf_var.get() if do_tab2 else False
-        do_backdata  = self.backdata_var.get()
-        do_tab4      = self.tab4_var.get()
-        do_pdf_final = self.pdf_final_var.get()
+        do_tab1 = self.tab1_var.get()
+        do_tab2 = self.tab2_var.get()
+        do_pdf = self.pdf_var.get() if do_tab2 else False
+        do_backdata = self.backdata_var.get()
+        do_tab4 = self.tab4_var.get()
+        do_pdf_final = self.pdf_final_var.get() if do_tab4 else False
 
-        answers = ["1", job]  # 매체=대기, 작업 선택
-
+        login_id = ""
+        login_pw = ""
         if job == "1":
             login_id = self.entry_id.get().strip()
             login_pw = self.entry_pw.get().strip()
@@ -647,45 +702,43 @@ class EcoInputGUI:
             if not any([do_tab1, do_tab2, do_backdata, do_tab4]):
                 messagebox.showwarning("입력 오류", "최소 1개 이상 선택해야 합니다.", parent=self.root)
                 return None
-            answers += [login_id, login_pw]
         else:
             do_tab1 = do_tab2 = do_pdf = do_tab4 = do_pdf_final = False
             do_backdata = True
 
-        answers += [
-            mode,
-            self._yn(do_tab1),
-            self._yn(do_tab2),
-            self._yn(do_pdf),
-            self._yn(do_backdata),
-            self._yn(do_tab4),
-            self._yn(do_pdf_final),
-        ]
+        opts = {
+            "media": "1",
+            "job": job,
+            "login_id": login_id,
+            "login_pw": login_pw,
+            "mode": mode,
+            "do_tab1": do_tab1,
+            "do_tab2": do_tab2,
+            "do_pdf_upload": do_pdf,
+            "do_backdata": do_backdata,
+            "do_tab4": do_tab4,
+            "do_pdf_final": do_pdf_final,
+        }
 
         if mode == "1":
             raw = self.txt_samples_air.get("1.0", "end").strip()
             if not raw:
                 messagebox.showwarning("입력 오류", "시료번호를 입력해 주세요.", parent=self.root)
                 return None
-            answers.append(raw)
+            opts["raw_samples"] = raw
         else:
-            # 선택된 팀 수집하여 콤마(,)로 연결 (예: "1,3,4" 또는 미선택 시 "")
             selected_teams = [str(i) for i in range(1, 6) if self.team_vars[i].get() == 1]
-            team_no = ",".join(selected_teams)
-            
             date_str = self.entry_date.get().strip()
-            
             if not date_str:
                 messagebox.showwarning("입력 오류", "날짜를 입력해 주세요.", parent=self.root)
                 return None
-                
             if parse_ymd_date(date_str) is None:
                 messagebox.showwarning("입력 오류", "날짜 형식: YYYY-MM-DD", parent=self.root)
                 return None
-                
-            answers += [team_no, date_str]
+            opts["team_no"] = ",".join(selected_teams)
+            opts["date_str"] = date_str
 
-        return answers
+        return opts
 
     # ──────────────────────────────────────────────
     # 백그라운드 실행
@@ -698,52 +751,70 @@ class EcoInputGUI:
         self.progress_bar.start(10)
 
         def worker():
-            old_input = builtins.input
-            seq = iter(answers)
-
-            def fake_input(prompt=""):
-                try:
-                    val = next(seq)
-                    return val
-                except StopIteration:
-                    return ""
-
-            builtins.input = fake_input
-
             try:
-                import sys
-                original_stdout = sys.stdout
+                import eco_input as _eco  # lazy import
+                log_writer = sys.stdout
 
                 class ProgressMonitor:
                     def __init__(self, original, root, btn):
                         self.original = original
-                        self.root     = root
-                        self.btn      = btn
+                        self.root = root
+                        self.btn = btn
 
                     def write(self, text):
-                        self.original.write(text)
-                        if any(k in text for k in
-                               ["입력", "생성", "업로드", "처리", "완료", "시작"]):
-                            msg = text.strip()[:35]
-                            if msg:
-                                self.root.after(0, lambda m=msg: self.btn.config(text=m))
+                        if text:
+                            self.original.write(text)
+                            if any(k in text for k in
+                                   ["입력", "생성", "업로드", "처리", "완료", "시작", "로그인", "Chrome", "수질", "대기"]):
+                                msg = text.strip().replace("\n", " ")[:35]
+                                if msg:
+                                    self.root.after(0, lambda m=msg: self.btn.config(text=m))
 
                     def flush(self):
                         self.original.flush()
 
-                sys.stdout = ProgressMonitor(original_stdout, self.root, self.start_btn)
+                sys.stdout = ProgressMonitor(log_writer, self.root, self.start_btn)
+
                 try:
-                    import eco_input as _eco  # lazy import
-                    _eco.main(cancel_event=self.cancel_event)
+                    if answers.get("media") == "2":
+                        _eco._main_water(
+                            cancel_event=self.cancel_event,
+                            login_id=answers["login_id"],
+                            login_pw=answers["login_pw"],
+                            do_tab2=answers["do_tab2"],
+                            do_tab4=answers["do_tab4"],
+                            do_pdf_final=answers["do_pdf_final"],
+                            raw_samples=answers["raw_samples"],
+                        )
+                    else:
+                        _eco._main_air(
+                            cancel_event=self.cancel_event,
+                            job=answers["job"],
+                            login_id=answers.get("login_id", ""),
+                            login_pw=answers.get("login_pw", ""),
+                            mode=answers["mode"],
+                            do_tab1=answers["do_tab1"],
+                            do_tab2=answers["do_tab2"],
+                            do_pdf_upload=answers["do_pdf_upload"],
+                            do_backdata=answers["do_backdata"],
+                            do_tab4=answers["do_tab4"],
+                            do_pdf_final=answers["do_pdf_final"],
+                            raw_samples=answers.get("raw_samples"),
+                            team_no=answers.get("team_no", ""),
+                            date_str=answers.get("date_str", ""),
+                        )
                 finally:
-                    sys.stdout = original_stdout
+                    sys.stdout = log_writer
 
             except Exception as e:
                 import traceback
                 traceback.print_exc()
-                self.root.after(0, lambda: messagebox.showerror("오류", str(e), parent=self.root))
+                err_msg = str(e)
+                self.root.after(
+                    0,
+                    lambda m=err_msg: messagebox.showerror("오류", m, parent=self.root),
+                )
             finally:
-                builtins.input = old_input
                 self.root.after(0, lambda: (
                     self.start_btn.config(state="normal", text="자동 입력 시작"),
                     self.cancel_btn.config(state="disabled"),
