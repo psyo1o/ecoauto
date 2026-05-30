@@ -49,7 +49,8 @@ def login(driver, login_id: str, login_pw: str,
     time.sleep(3)
     close_popup(driver)
 
-    print("[2] 현장측정분석(대기) 이동")
+    media = "수질" if "field_water" in (field_url or "") else "대기"
+    print(f"[2] 현장측정분석({media}) 이동")
     driver.get(field_url)
     time.sleep(2)
 
@@ -117,7 +118,12 @@ def get_samples_current_page(driver, prefix: str = "A") -> list:
 # 상세 페이지 진입
 # ======================================================================
 
-def _try_find_sample_and_open(driver, sample_no: str, max_pages: int = 5) -> bool:
+def _try_find_sample_and_open(
+    driver,
+    sample_no: str,
+    max_pages: int = 5,
+    detail_wait_sel: str = "#machineDiv",
+) -> bool:
     """
     현재 페이지부터 max_pages까지 이동하며 sample_no를 더블클릭 → 상세 진입.
     찾으면 True, 못 찾으면 False 반환.
@@ -133,7 +139,7 @@ def _try_find_sample_and_open(driver, sample_no: str, max_pages: int = 5) -> boo
             driver.execute_script("arguments[0].scrollIntoView(true);", cell)
             time.sleep(0.15)
             ActionChains(driver).double_click(cell).perform()
-            wait_el(driver, "#machineDiv", timeout=10)
+            wait_el(driver, detail_wait_sel, timeout=10)
             time.sleep(0.3)
             return True
         except Exception:
@@ -152,9 +158,13 @@ def _try_find_sample_and_open(driver, sample_no: str, max_pages: int = 5) -> boo
     return False
 
 
-def open_sample_detail(driver, sample_no: str,
-                       search_box: str = "#search_meas_mgmt_no",
-                       max_pages: int = 5) -> bool:
+def open_sample_detail(
+    driver,
+    sample_no: str,
+    search_box: str = "#search_meas_mgmt_no",
+    max_pages: int = 5,
+    detail_wait_sel: str = "#machineDiv",
+) -> bool:
     """
     시료번호로 검색 후 상세페이지 진입 (최대 2회 시도).
     성공하면 True, 실패하면 False.
@@ -176,7 +186,7 @@ def open_sample_detail(driver, sample_no: str,
     time.sleep(1.5)
 
     # 1차 시도
-    if _try_find_sample_and_open(driver, sample_no, max_pages):
+    if _try_find_sample_and_open(driver, sample_no, max_pages, detail_wait_sel):
         return True
 
     print(" → 1차 실패: 재검색 후 재시도")
@@ -187,7 +197,7 @@ def open_sample_detail(driver, sample_no: str,
         pass
 
     # 2차 시도
-    if _try_find_sample_and_open(driver, sample_no, max_pages):
+    if _try_find_sample_and_open(driver, sample_no, max_pages, detail_wait_sel):
         return True
 
     print(f" → 2차 실패: {sample_no} 없음")

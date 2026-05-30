@@ -60,6 +60,7 @@ from file_utils import find_best_matching_file as _find_best_file_util
 from excel_utils import find_sheet_by_candidates
 from excel_com_utils import get_excel_app
 from config import REPORT_SRC, DAEJANG_ROOT, USER_ROOT
+from cancel_utils import is_cancelled
 
 SRC_DIR = REPORT_SRC
 _DAEJANG_AIR_CACHE = {}
@@ -1164,7 +1165,7 @@ def main(sample_list, user_name, cancel_event=None):
         dummy_ws.Name = "Dummy_End"
 
         for item in sample_list:
-            if cancel_event and cancel_event.is_set():
+            if is_cancelled(cancel_event):
                 log("\n[작업 취소] 사용자에 의해 작업을 중단합니다.")
                 break
 
@@ -1780,7 +1781,7 @@ def main(sample_list, user_name, cancel_event=None):
         # --- 모든 샘플 작업 종료 후 ---
         add_fail_sheet(wb_out, fail_list)
         
-        if cancel_event and cancel_event.is_set():
+        if is_cancelled(cancel_event):
             # 취소 시 파일 저장 없이 종료
             wb_out.Close(SaveChanges=False)
             log("\n=== 취소됨 ===")

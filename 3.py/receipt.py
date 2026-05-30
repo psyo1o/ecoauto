@@ -50,6 +50,7 @@ from data_utils import (
     excel_value_to_time, parse_time_range as _parse_time_range_data
 )
 from log_utils import log_error
+from cancel_utils import is_cancelled
 from config import (
     REPORT_BASE,
     REPORT_WORKFLOW_DIRS,
@@ -530,6 +531,10 @@ def process_daejang(daejang_path: str,
     current_count = 0
 
     for sheet_name in target_sheets:
+        if is_cancelled(cancel_event):
+            print("\n[작업 취소] 사용자에 의해 작업이 중단되었습니다.")
+            return out_paths
+
         day_str = sheet_name[:-1]
         day_int = int(day_str)
 
@@ -558,6 +563,10 @@ def process_daejang(daejang_path: str,
             current_count += 1
             if progress_callback:
                 progress_callback(current_count, total_samples)
+
+            if is_cancelled(cancel_event):
+                print("\n[작업 취소] 사용자에 의해 작업이 중단되었습니다.")
+                return out_paths
 
             sn_date = parse_sn_date(sn)
             if sn_date is not None:

@@ -9,8 +9,7 @@ import time
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
-from selenium_utils import safe_click, set_date_js
-from selenium_utils import accept_all_alerts as _accept_all_alerts
+from selenium_utils import safe_click, set_date_js, tab4_alerts_after_save, tab4_after_comp_save_confirm
 from realgrid_utils import rg_paste_to_tr_tab4
 from excel_com_utils import get_excel_app
 from data_utils import sample_to_datestr
@@ -135,14 +134,22 @@ def _norm_rg(s: str) -> str:
     return " ".join(s.split())
 
 
-def tab4_find_tr_by_item(driver, item_name: str, max_steps=600):
+def tab4_find_tr_by_item(
+    driver,
+    item_name: str,
+    max_steps=600,
+    grid_root: str | None = None,
+    item_col: int = 3,
+):
     """
     탭4 RealGrid 탐색(ArrowDown/ArrowUp 다중 이동):
     - 현재 화면의 보이는 행에서 먼저 탐색
     - 없으면 ArrowDown을 10칸씩 이동하며 탐색
     - 아래 끝 도달 시 ArrowUp으로 10칸씩 올라가며 재탐색
     """
-    grid = driver.find_element(By.CSS_SELECTOR, TAB4_GRID_ROOT)
+    grid_root = grid_root or TAB4_GRID_ROOT
+    item_col = int(item_col) if item_col else 3
+    grid = driver.find_element(By.CSS_SELECTOR, grid_root)
     body = grid.find_element(By.CSS_SELECTOR, "div.rg-body")
     target = _norm_rg(item_name)
 
@@ -158,7 +165,9 @@ def tab4_find_tr_by_item(driver, item_name: str, max_steps=600):
         first_txt, last_txt = "", ""
         for idx, tr in enumerate(trs):
             try:
-                cell = tr.find_element(By.CSS_SELECTOR, "td:nth-child(3) > div")
+                cell = tr.find_element(
+                    By.CSS_SELECTOR, f"td:nth-child({item_col}) > div"
+                )
                 txt = _norm_rg(cell.text)
                 if idx == 0:
                     first_txt = txt
@@ -187,7 +196,9 @@ def tab4_find_tr_by_item(driver, item_name: str, max_steps=600):
     # 키 입력 포커스 확보
     try:
         first_tr = body.find_element(By.CSS_SELECTOR, "table > tbody > tr:first-child")
-        first_cell = first_tr.find_element(By.CSS_SELECTOR, "td:nth-child(3) > div")
+        first_cell = first_tr.find_element(
+            By.CSS_SELECTOR, f"td:nth-child({item_col}) > div"
+        )
         ActionChains(driver).move_to_element(first_cell).click(first_cell).perform()
         time.sleep(0.05)
     except:
@@ -250,23 +261,23 @@ def tab4_find_tr_by_item(driver, item_name: str, max_steps=600):
 
     return None
 
-def tab4_paste_row_using_tab2(driver, tr, values_A_to_M):
+def tab4_paste_row_using_tab2(driver, tr, values_A_to_M, start_col: int = 3):
     """
     values_A_to_M: 엑셀 A~M (13개)
     Tab4 전용 - rg_paste_to_tr_tab4 사용 (move_to_element 없음)
+    start_col: 붙여넣기 시작 열 (측정항목 열, 기본 3)
     """
-    # 1차: 3열(측정항목)부터
+    col = int(start_col) if start_col else 3
     try:
-        rg_paste_to_tr_tab4(driver, tr, start_col=3, values=values_A_to_M)
+        rg_paste_to_tr_tab4(driver, tr, start_col=col, values=values_A_to_M)
         return True
-    except:
+    except Exception:
         pass
 
-    # 2차: 4열부터(3열이 뭔가 막혔을 때 대비)
     try:
-        rg_paste_to_tr_tab4(driver, tr, start_col=4, values=values_A_to_M)
+        rg_paste_to_tr_tab4(driver, tr, start_col=col + 1, values=values_A_to_M)
         return True
-    except:
+    except Exception:
         return False
 
 
@@ -434,11 +445,12 @@ def fill_tab4_dates(driver, sample_no: str, tab4_meta: dict):
 # 탭4 저장
 # =====================================================================
 def tab4_temp_save(driver):
-    # 임시저장
+    """임시저장 — 수정 사유 창 없음, 확인 alert만."""
     safe_click(driver, "#btnTempSave")
-    _accept_all_alerts(driver, total_wait=6.0, poll=0.2, label="탭4임시저장")
-    
+    tab4_alerts_after_save(driver, label="탭4임시저장")
+
+
 def tab4_comp_save(driver):
-    # 입력완료
+    """분석완료 — 재수정 시 수정 사유 자동 입력 후 확인."""
     safe_click(driver, "#btnCompSave")
-    _accept_all_alerts(driver, total_wait=6.0, poll=0.2, label="탭4저장완료")
+    tab4_after_comp_save_confirm(driver, label="탭4저장완료")

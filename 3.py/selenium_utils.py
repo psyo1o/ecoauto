@@ -18,8 +18,7 @@ def wait(sec):
     time.sleep(sec)
 
 
-def init_driver():
-    """Selenium 드라이버 초기화"""
+def _chrome_options():
     opt = webdriver.ChromeOptions()
     opt.add_experimental_option("detach", True)
     opt.add_experimental_option(
@@ -30,9 +29,67 @@ def init_driver():
         },
     )
     opt.add_argument("--disable-notifications")
-    d = webdriver.Chrome(options=opt)
-    d.maximize_window()
-    return d
+    return opt
+
+
+def _raise_policy_block(cause: BaseException) -> None:
+    """WinError 4551 등 앱 제어 정책으로 chromedriver.exe 실행이 막힐 때."""
+    raise OSError(
+        "ChromeDriver 실행이 Windows '애플리케이션 제어 정책'에 막혔습니다.\n"
+        "(대기·수질 모두 같은 Chrome 드라이버를 사용합니다.)\n\n"
+        "조치:\n"
+        "1) PC에서 0.처음사용시\\드라이버 자동설치(크롬).bat 실행\n"
+        "2) 새 터미널·프로그램 재실행 또는 PC 재로그인\n"
+        "3) 계속되면 IT에 chromedriver.exe / Google Chrome 실행 허용 요청\n\n"
+        f"원인: {cause}"
+    ) from cause
+
+
+def init_driver():
+    """Selenium Chrome 드라이버 초기화.
+
+    PATH의 chromedriver(네트워크·C:\\chromedriver 등)가 정책에 막히는 PC는
+    webdriver-manager가 사용자 폴더(.wdm)에 받은 드라이버를 우선 사용한다.
+    """
+    opt = _chrome_options()
+    last_err = None
+
+    try:
+        from selenium.webdriver.chrome.service import Service
+        from webdriver_manager.chrome import ChromeDriverManager
+
+        driver_path = ChromeDriverManager().install()
+        print(f"   ↳ ChromeDriver: {driver_path}", flush=True)
+        d = webdriver.Chrome(service=Service(driver_path), options=opt)
+        d.maximize_window()
+        return d
+    except ImportError:
+        pass
+    except OSError as e:
+        if getattr(e, "winerror", None) == 4551:
+            _raise_policy_block(e)
+        last_err = e
+        print(f"   ⚠ webdriver-manager 경로 실패: {e}", flush=True)
+    except Exception as e:
+        last_err = e
+        print(f"   ⚠ webdriver-manager 경로 실패: {e}", flush=True)
+
+    try:
+        d = webdriver.Chrome(options=opt)
+        d.maximize_window()
+        return d
+    except OSError as e:
+        if getattr(e, "winerror", None) == 4551:
+            _raise_policy_block(e)
+        raise
+    except Exception as e:
+        if last_err:
+            raise RuntimeError(
+                f"Chrome 드라이버를 시작하지 못했습니다.\n"
+                f"webdriver-manager: {last_err}\n"
+                f"Selenium 기본: {e}"
+            ) from e
+        raise
 
 
 def safe_click(driver, selector, timeout=10):
@@ -80,6 +137,72 @@ def accept_all_alerts(driver, total_wait=8.0, poll=0.2, max_accept=10, label="")
     if accepted and label:
         print(f"   ↳ {accepted}회 확인({label})")
     return accepted
+
+
+# 탭4 재저장 시 페이지 내 「수정 사유」 (팝업창 아님, 동일 브라우저 탭)
+TAB4_UPDATE_REASON_SEL = "#update_reason"
+TAB4_UPDATE_REASON_SAVE_SEL = "#btnSaveupdateReason"
+TAB4_UPDATE_REASON_DEFAULT = "오기 수정합니다."
+
+
+def fill_tab4_update_reason_if_present(
+    driver,
+    reason: str = TAB4_UPDATE_REASON_DEFAULT,
+    textarea_sel: str = TAB4_UPDATE_REASON_SEL,
+    save_sel: str = TAB4_UPDATE_REASON_SAVE_SEL,
+    wait_sec: float = 5.0,
+) -> bool:
+    """수정 사유 textarea가 보이면 입력 후 #btnSaveupdateReason 클릭. 없으면 False."""
+    end = time.time() + float(wait_sec)
+    while time.time() < end:
+        try:
+            ta = None
+            for el in driver.find_elements(By.CSS_SELECTOR, textarea_sel):
+                try:
+                    if el.is_displayed():
+                        ta = el
+                        break
+                except Exception:
+                    continue
+            if ta is not None:
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center'});", ta
+                )
+                time.sleep(0.15)
+                driver.execute_script(
+                    """
+                    arguments[0].value = arguments[1];
+                    arguments[0].dispatchEvent(new Event('input', {bubbles: true}));
+                    arguments[0].dispatchEvent(new Event('change', {bubbles: true}));
+                    """,
+                    ta,
+                    reason,
+                )
+                time.sleep(0.2)
+                btn = WebDriverWait(driver, 4).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, save_sel))
+                )
+                driver.execute_script("arguments[0].click();", btn)
+                print(f"   ↳ 수정 사유 입력·저장: {reason}")
+                time.sleep(0.35)
+                return True
+        except Exception:
+            pass
+        time.sleep(0.2)
+    return False
+
+
+def tab4_alerts_after_save(driver, label: str = "탭4"):
+    """저장 클릭 직후 확인 alert만 (임시저장 등)."""
+    accept_all_alerts(driver, total_wait=2.5, poll=0.15, label=f"{label}-1차")
+    accept_all_alerts(driver, total_wait=7.0, poll=0.2, label=f"{label}-대기")
+    accept_all_alerts(driver, total_wait=2.0, poll=0.2, label=f"{label}-마무리")
+
+
+def tab4_after_comp_save_confirm(driver, label: str = "탭4"):
+    """분석완료(#btnCompSave) 후: 수정 사유(재수정 시) → 확인 alert."""
+    fill_tab4_update_reason_if_present(driver)
+    tab4_alerts_after_save(driver, label)
 
 
 def set_date_js(driver, selector, value):
