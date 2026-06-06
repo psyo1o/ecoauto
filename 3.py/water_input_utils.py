@@ -177,6 +177,12 @@ def read_water_tab4_from_macro_xlsm(sample_no: str) -> dict:
         if ws is None:
             ws = wb.Worksheets(WATER_ANZE_SHEET)
 
+        # 활성 시트가 다른 곳이어도 작업 시트를 강제로 맞춘다.
+        try:
+            ws.Activate()
+        except Exception:
+            pass
+
         ws.Range("A6").Value = sample_no
 
         try:

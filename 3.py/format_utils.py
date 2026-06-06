@@ -221,3 +221,67 @@ def fmt_hhmm(dt_obj) -> str:
 def fmt_range(start, end) -> str:
     """두 datetime을 'HH:MM~HH:MM' 형식으로 포맷."""
     return f"{fmt_hhmm(start)}~{fmt_hhmm(end)}" if (start and end) else ""
+
+
+def _strip_all_spaces(s: str) -> str:
+    return "".join(str(s).split())
+
+
+def staff_name_before_slash(value) -> str:
+    """인력 '이름 / 팀 / 직급' → 첫 '/' 앞, 공백 제거."""
+    if value is None:
+        return ""
+    s = str(value).strip()
+    if not s:
+        return ""
+    head = s.split("/", 1)[0].strip()
+    return _strip_all_spaces(head)
+
+
+def vehicle_plate_after_slash(value) -> str:
+    """차량 '그랜드 스타렉스 / 81주6787' → 첫 '/' 뒤, 공백 제거. '/' 없으면 전체."""
+    if value is None:
+        return ""
+    s = str(value).strip()
+    if not s:
+        return ""
+    tail = s.split("/", 1)[1].strip() if "/" in s else s
+    return _strip_all_spaces(tail)
+
+
+def equipment_name_before_slash(value) -> str:
+    """장비 '대기배출가스측정기5 / Optima 7 / …' → 첫 '/' 앞, 공백 제거."""
+    return staff_name_before_slash(value)
+
+
+def _dedupe_tab1_tokens(normalize_fn, values) -> list:
+    out, seen = [], set()
+    for raw in values or []:
+        tok = normalize_fn(raw)
+        if tok and tok not in seen:
+            seen.add(tok)
+            out.append(tok)
+    return out
+
+
+def normalize_tab1_staff_list(values) -> list:
+    return _dedupe_tab1_tokens(staff_name_before_slash, values)
+
+
+def normalize_tab1_vehicle_list(values) -> list:
+    return _dedupe_tab1_tokens(vehicle_plate_after_slash, values)
+
+
+def normalize_tab1_equipment_list(values) -> list:
+    return _dedupe_tab1_tokens(equipment_name_before_slash, values)
+
+
+def normalize_tab1_select_field(field: str, values) -> list:
+    """탭1 인력·차량·장비 — eco_input 등록·eco_check 비교 공통 규칙."""
+    if field == "인력":
+        return normalize_tab1_staff_list(values)
+    if field == "차량":
+        return normalize_tab1_vehicle_list(values)
+    if field == "장비":
+        return normalize_tab1_equipment_list(values)
+    return [str(x).strip() for x in (values or []) if str(x).strip()]

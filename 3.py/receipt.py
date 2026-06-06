@@ -24,6 +24,8 @@ from tkinter.scrolledtext import ScrolledText
 
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import PatternFill
+from openpyxl.utils import get_column_letter
+from excel_utils import autofit_columns
 
 # ★추가(샘플 형태 비교용)
 import hashlib
@@ -837,6 +839,9 @@ def process_daejang(daejang_path: str,
                     cell.fill = blue_fill
                 elif ("오류" in val) or ("없음" in val) or ("불일치" in val) or ("sn없음" in val) or ("시간" in val and "ok" not in val):
                     cell.fill = red_fill
+
+        last_col = get_column_letter(len(headers))
+        autofit_columns(report_ws, f"A:{last_col}")
 
         # ✅ 파일명: 하루마다 YYMMDD 발송대장 체크.xlsx
         if day_sn_dates:
