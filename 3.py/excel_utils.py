@@ -7,8 +7,15 @@ import warnings
 warnings.filterwarnings("ignore")  # 무조건 모든 경고 차단 (조건 없음)
 from datetime import datetime
 from openpyxl import load_workbook
-from openpyxl.utils import range_boundaries
-from format_utils import format_time, to_float1, to_float2
+from openpyxl.utils import range_boundaries, column_index_from_string, get_column_letter
+from format_utils import (
+    format_time,
+    to_float1,
+    to_float2,
+    staff_name_before_slash,
+    vehicle_plate_after_slash,
+    equipment_name_before_slash,
+)
 from file_utils import is_fugitive_dust_file
 
 def find_sheet_by_candidates(wb, candidates: list):
@@ -107,9 +114,16 @@ def parse_measuring_record(excel_path: str, sample_no: str) -> dict:
         v_comp = ws_input["H7"].value
         data["업소명"] = "" if v_comp is None else str(v_comp).strip()
 
-        # 측정목적 (F10)
+        # 측정목적 (F10) — 1=자가측정용, 2=참고용 (eco_input 탭1·eco_check 검증)
         v_purpose = ws_input["F10"].value
-        data["측정목적"] = "" if v_purpose is None else str(v_purpose).strip()
+        if v_purpose is None:
+            data["측정목적"] = ""
+        else:
+            try:
+                n = int(float(v_purpose))
+                data["측정목적"] = str(n) if n in (1, 2) else str(v_purpose).strip()
+            except (TypeError, ValueError):
+                data["측정목적"] = str(v_purpose).strip()
 
         # 시료번호에서 팀 번호 추출하여 해당 행(row) 파싱
         try:
@@ -123,19 +137,73 @@ def parse_measuring_record(excel_path: str, sample_no: str) -> dict:
             staff = []
             for c in (29, 30):
                 v = ws_input.cell(row=row, column=c).value
-                if v and _clean_text(v): staff.append(_clean_text(v))
+                if not v:
+                    continue
+                name = staff_name_before_slash(_clean_text(v))
+                if name:
+                    staff.append(name)
             data["인력"] = list(dict.fromkeys(staff))
 
-            # 차량 (AE)
+            # 차량 (AE) — 모델명 / 번호판 → 번호판만
             car = ws_input.cell(row=row, column=31).value
-            data["차량"] = [_clean_text(car)] if car and _clean_text(car) else []
+            if car:
+                plate = vehicle_plate_after_slash(_clean_text(car))
+                data["차량"] = [plate] if plate else []
+            else:
+                data["차량"] = []
 
-            # 장비 (AH~AQ)
+            # 장비 (AH~AQ) — 장비명 / … → 첫 '/' 앞 장비명만
             eq = []
             for c in range(34, 44):
                 v = ws_input.cell(row=row, column=c).value
-                if v and _clean_text(v): eq.append(_clean_text(v))
+                if not v:
+                    continue
+                name = equipment_name_before_slash(_clean_text(v))
+                if name:
+                    eq.append(name)
             data["장비"] = list(dict.fromkeys(eq))
 
     wb.close()
     return data
+
+
+def _expand_column_letters(cols) -> list[str]:
+    """'A', 'A:C', ['A','B'] → 열 문자 목록."""
+    if isinstance(cols, (list, tuple)):
+        out = []
+        for part in cols:
+            out.extend(_expand_column_letters(part))
+        return out
+    spec = str(cols).strip().upper()
+    if ":" in spec:
+        a, b = spec.split(":", 1)
+        i1 = column_index_from_string(a.strip())
+        i2 = column_index_from_string(b.strip())
+        lo, hi = (i1, i2) if i1 <= i2 else (i2, i1)
+        return [get_column_letter(i) for i in range(lo, hi + 1)]
+    return [spec]
+
+
+def _cell_display_width(value) -> float:
+    """openpyxl 열 너비 추정용 (한글 등 넓은 문자 가중)."""
+    if value is None:
+        return 0.0
+    s = str(value)
+    w = 0.0
+    for ch in s:
+        w += 2.0 if ord(ch) > 127 else 1.0
+    return w
+
+
+def autofit_columns(ws, cols="A:Z", min_width: float = 8.0, max_width: float = 55.0, extra_pad: float = 2.0):
+    """결과 엑셀 열 너비 자동 조정 (Excel AutoFit 근사). cols 예: 'A:C', 'A', ['A','B']."""
+    if ws.max_row < 1:
+        return
+    for col_letter in _expand_column_letters(cols):
+        col_idx = column_index_from_string(col_letter)
+        max_w = 0.0
+        for row in range(1, ws.max_row + 1):
+            cell = ws.cell(row=row, column=col_idx)
+            max_w = max(max_w, _cell_display_width(cell.value))
+        width = min(max_width, max(min_width, max_w + extra_pad))
+        ws.column_dimensions[col_letter].width = width

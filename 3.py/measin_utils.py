@@ -24,6 +24,34 @@ NAS_DIRS = REPORT_WORKFLOW_DIRS
 # 로그인
 # ======================================================================
 
+def _clear_and_fill_input(driver, selector: str, value: str, timeout: float = 10.0):
+    """로그인 등 — 기존 값 제거 후 재입력 (세션 만료 후 재로그인용)."""
+    el = WebDriverWait(driver, timeout).until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+    )
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+    except Exception:
+        pass
+    try:
+        el.clear()
+    except Exception:
+        pass
+    try:
+        driver.execute_script(
+            """
+            arguments[0].value = '';
+            arguments[0].dispatchEvent(new Event('input', {bubbles: true}));
+            arguments[0].dispatchEvent(new Event('change', {bubbles: true}));
+            """,
+            el,
+        )
+    except Exception:
+        pass
+    if value:
+        el.send_keys(str(value))
+
+
 def login(driver, login_id: str, login_pw: str,
           login_url: str = LOGIN_URL,
           field_url: str = FIELD_URL):
@@ -36,8 +64,8 @@ def login(driver, login_id: str, login_pw: str,
     time.sleep(2)
 
     try:
-        driver.find_element(By.CSS_SELECTOR, "#user_email").send_keys(login_id)
-        driver.find_element(By.CSS_SELECTOR, "#login_pwd_confirm").send_keys(login_pw)
+        _clear_and_fill_input(driver, "#user_email", login_id)
+        _clear_and_fill_input(driver, "#login_pwd_confirm", login_pw)
     except Exception:
         input("ID/PW 직접 입력 후 엔터")
 

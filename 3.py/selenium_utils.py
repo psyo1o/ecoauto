@@ -200,9 +200,20 @@ def tab4_alerts_after_save(driver, label: str = "탭4"):
 
 
 def tab4_after_comp_save_confirm(driver, label: str = "탭4"):
-    """분석완료(#btnCompSave) 후: 수정 사유(재수정 시) → 확인 alert."""
-    fill_tab4_update_reason_if_present(driver)
-    tab4_alerts_after_save(driver, label)
+    """분석완료(#btnCompSave) 후 처리.
+    1) 확인창 처리(탭2와 동일 3단계)
+    2) 수정 사유 창이 뜨면 입력/저장
+    3) 저장 후 확인창 재처리(탭2와 동일 3단계)
+    """
+    # 1) 먼저 분석완료 확인창을 처리
+    tab4_alerts_after_save(driver, f"{label}-초기")
+
+    # 2) 재수정 케이스면 수정 사유 입력/저장
+    wrote_reason = fill_tab4_update_reason_if_present(driver, wait_sec=1.8)
+
+    # 3) 수정 사유 저장으로 추가 alert가 뜰 수 있어 동일 패턴으로 다시 처리
+    if wrote_reason:
+        tab4_alerts_after_save(driver, f"{label}-사유저장")
 
 
 def set_date_js(driver, selector, value):

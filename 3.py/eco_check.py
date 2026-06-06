@@ -26,7 +26,13 @@ from openpyxl.formatting.rule import FormulaRule
 # 공통 유틸 모듈 (모듈화)
 # ============================================================
 from selenium_utils import safe_click, wait_el as wait_until_exists, close_popup, set_date_js, wait
-from format_utils import format_time as trim_time_to_hm, to_float1, to_float2, parse_datetime_text
+from format_utils import (
+    format_time as trim_time_to_hm,
+    to_float1,
+    to_float2,
+    parse_datetime_text,
+    normalize_tab1_select_field,
+)
 from data_utils import norm_ymd, sample_to_datestr, clean_leading_mark
 from excel_utils import find_sheet_by_candidates as _find_sheet_by_candidates_openpyxl
 from file_utils import find_best_matching_file as _find_best_file_util, is_fugitive_dust_file
@@ -35,7 +41,7 @@ from measin_utils import (
     open_sample_detail, go_back_to_list, collect_samples_from_files,
     LOGIN_URL, FIELD_URL, NAS_BASE, NAS_DIRS
 )
-from excel_utils import find_sheet_by_candidates, parse_measuring_record
+from excel_utils import find_sheet_by_candidates, parse_measuring_record, autofit_columns
 from realgrid_utils import rg_api_read_data
 from log_utils import log_error
 from cancel_utils import is_cancelled
@@ -828,6 +834,10 @@ def compare_scalar(sample, field, site_val, excel_val):
 
 
 def compare_list(sample, field, site_list, excel_list):
+    # 탭1 인력·차량·장비: 슬래시 규칙·공백 제거 후 비교 (eco_input 탭1 등록과 동일)
+    if field in ("인력", "차량", "장비"):
+        site_list = normalize_tab1_select_field(field, site_list)
+        excel_list = normalize_tab1_select_field(field, excel_list)
     s = set([x.strip() for x in site_list if x.strip()])
     e = set([x.strip() for x in excel_list if x.strip()])
 
@@ -1062,6 +1072,9 @@ def save_results(sample_rows_map, out_path):
         if ws_sample.max_row > 1:
             rule_sample = FormulaRule(formula=['$D2="NG"'], fill=red_fill)
             ws_sample.conditional_formatting.add(f"D2:D{ws_sample.max_row}", rule_sample)
+
+    # 요약 시트 A~C 열 너비 자동 조정
+    autofit_columns(ws_sum, "A:C")
 
     try:
         wb.save(out_path)

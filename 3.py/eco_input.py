@@ -44,7 +44,7 @@ warnings.filterwarnings(
 # 공통 유틸 모듈 (모듈화)
 # ============================================================
 from selenium_utils import (
-    init_driver, safe_click, wait_el, set_date_js,
+    init_driver, safe_click, wait_el, set_date_js, fill_select_option,
     accept_all_alerts as _accept_all_alerts,
     accept_all_alerts as _accept_alerts_base,
     close_popup, wait
@@ -57,7 +57,14 @@ from measin_utils import (
     collect_samples_from_files,
     LOGIN_URL, FIELD_URL, NAS_BASE, NAS_DIRS
 )
-from format_utils import format_time as trim_hm, to_f1, to_f2
+from format_utils import (
+    format_time as trim_hm,
+    to_f1,
+    to_f2,
+    normalize_tab1_staff_list,
+    normalize_tab1_vehicle_list,
+    normalize_tab1_equipment_list,
+)
 from data_utils import parse_ymd_date, sample_to_datestr, clean_leading_mark as clean
 from realgrid_utils import (
     rg_dump_headers, rg_find_col, rg_find_cols, rg_get_body, rg_api_write_data, 
@@ -387,9 +394,53 @@ def add_multi(d, search_sel, val):
 def fill_multi(d, ul_sel, search_sel, values):
     _Select2Handler(d).fill(ul_sel, search_sel, values)
 
+
+# 탭1 측정용도 — 입력 시트 F10 → #edit_meas_purpose (eco_check 검증과 동일 매핑)
+MEAS_PURPOSE_SEL = "#edit_meas_purpose"
+MEAS_PURPOSE_BY_F10 = {"1": "SELF", "2": "CF"}   # 1=자가측정용, 2=참고용
+MEAS_PURPOSE_LABEL = {"1": "자가측정용", "2": "참고용"}
+
+
+def _normalize_meas_purpose_f10(raw) -> str | None:
+    """입력 시트 F10 → '1' 또는 '2'. 그 외는 None."""
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    if s in MEAS_PURPOSE_BY_F10:
+        return s
+    try:
+        n = int(float(s))
+        if n in (1, 2):
+            return str(n)
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def set_meas_purpose_from_excel(d, purpose_f10) -> bool:
+    """탭1 측정용도 select — F10: 1=자가측정용(SELF), 2=참고용(CF)."""
+    code = _normalize_meas_purpose_f10(purpose_f10)
+    if not code:
+        if purpose_f10 not in (None, "", " "):
+            print(f"  ⚠ 측정용도 F10={purpose_f10!r} — 1(자가측정용)·2(참고용)만 지원")
+        return False
+    val = MEAS_PURPOSE_BY_F10[code]
+    if fill_select_option(d, MEAS_PURPOSE_SEL, val):
+        print(f"  → 측정용도: {MEAS_PURPOSE_LABEL[code]} (#edit_meas_purpose={val})")
+        return True
+    print(f"  ⚠ 측정용도 선택 실패 (F10={code} → {val})")
+    return False
+
+
 def fill_tab1(d, data, is_dust):
     print("▶ 탭1 입력 시작")
     set_dust_radio(d, is_dust)
+    set_meas_purpose_from_excel(d, data.get("측정목적"))
+    staff_names = normalize_tab1_staff_list(data.get("인력"))
+    vehicle_vals = normalize_tab1_vehicle_list(data.get("차량"))
+    equipment_vals = normalize_tab1_equipment_list(data.get("장비"))
 
     # --------------------------------------
     # ① 비산먼지인 경우
@@ -406,28 +457,28 @@ def fill_tab1(d, data, is_dust):
             data["측정항목"]
         )
 
-        # 인력
+        # 인력 (엑셀: 임종희 / 대기팀 / 기사 → Select2에는 임종희만)
         fill_multi(
             d,
             "#wid-id-4 > div > div.widget-body.no-padding > div > fieldset > div.row.input-full > section:nth-child(2) > span > span.selection > span > ul",
             "#wid-id-4 > div > div.widget-body.no-padding > div > fieldset > div.row.input-full > section:nth-child(2) > span > span.selection > span > ul > li.select2-search.select2-search--inline > input",
-            data["인력"]
+            staff_names,
         )
 
-        # 차량
+        # 차량 (모델명 / 번호판 → 번호판만)
         fill_multi(
             d,
             "#carSection > div > span > span.selection > span > ul",
             "#carSection > div > span > span.selection > span > ul > li.select2-search.select2-search--inline > input",
-            data["차량"]
+            vehicle_vals,
         )
 
-        # 장비
+        # 장비 (장비명 / … → 장비명만)
         fill_multi(
             d,
             "#machineDiv > div > span > span.selection > span > ul",
             "#machineDiv > div > span > span.selection > span > ul > li.select2-search.select2-search--inline > input",
-            data["장비"]
+            equipment_vals,
         )
 
 
@@ -445,28 +496,28 @@ def fill_tab1(d, data, is_dust):
             data["측정항목"]
         )
 
-        # 인력
+        # 인력 (엑셀: 임종희 / 대기팀 / 기사 → Select2에는 임종희만)
         fill_multi(
             d,
             "#edit_emp_id + span ul.select2-selection__rendered",
             "#edit_emp_id + span input.select2-search__field",
-            data["인력"]
+            staff_names,
         )
 
-        # 차량
+        # 차량 (모델명 / 번호판 → 번호판만)
         fill_multi(
             d,
             "#carSection > div > span > span.selection > span > ul",
             "#carSection input[type='search']",
-            data["차량"]
+            vehicle_vals,
         )
 
-        # 장비
+        # 장비 (장비명 / … → 장비명만)
         fill_multi(
             d,
             "#machineDiv > div > span > span.selection > span > ul",
             "#machineDiv input[type='search']",
-            data["장비"]
+            equipment_vals,
         )
 
     print("▶ 탭1 입력 완료")
@@ -1605,7 +1656,7 @@ def _main_water(
 ):
     """
     수질 자동입력 (https://측정인.kr/ms/field_water.do)
-    1) 날짜·시료번호 검색 → 상세
+    1) 시료번호만 검색 → 상세 (날짜 범위 검색 없음)
     2) 탭2: 용기/용량/개수/측정위치 → 입력완료
     3) 탭4: 매크로엑셀(26.05 수질) 날짜·RealGrid·PDF → 분석완료
     성적서 NAS + PDF 병합 경로: PDF_WATER
@@ -1687,7 +1738,6 @@ def _main_water(
         item = items[idx]
         sample = item["sample"]
         path = item["path"]
-        date_str = sample_to_datestr(sample)
 
         print(f"\n{'='*51}")
         print(f"▶ 수질 시료: {sample}")
@@ -1696,15 +1746,13 @@ def _main_water(
         if is_cancelled(cancel_event):
             break
 
-        if date_str:
-            search_date(driver, date_str, date_str)
-
+        # 수질: 날짜 범위 검색 생략 → 목록에서 시료번호만 검색 후 상세 진입
         if not open_detail_with_session_recovery(
             driver,
             sample,
             login_id,
             login_pw,
-            date_str=date_str,
+            date_str=None,
             field_url=FIELD_URL_WATER,
             detail_wait_sel=WATER_DETAIL_WAIT_SEL,
         ):

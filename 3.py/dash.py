@@ -23,6 +23,7 @@ from tkinter.messagebox import showerror, showinfo
 
 from data_utils import parse_sn as _parse_sn_raw, parse_time as _parse_time_raw
 from gui_common import LogPanel
+from excel_utils import autofit_columns
 from log_utils import log_error
 from config import TOTAL_REVIEW, RECEIPT_REVIEW, MEASIN_REVIEW
 
@@ -626,6 +627,9 @@ def write_dashboard_excel(out_path: str, summary_df: pd.DataFrame, detail_df: pd
         cur_row = _write_section("장비중복", causes["장비중복(장비명별)"], causes["장비중복(사례)"], cur_row)
         cur_row = _write_section("인력중복", causes["인력중복(인력명별)"], causes["인력중복(사례)"], cur_row)
         cur_row = _write_section("차량중복", causes["차량중복(차량별)"], causes["차량중복(사례)"], cur_row)
+
+        for sheet_name in ("대시보드", "상세", "원인집계"):
+            autofit_columns(w.sheets[sheet_name], "A")
 
 #--------------GUI-------------
 class DashGUI:
