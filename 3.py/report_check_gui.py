@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-성적서 검토 GUI (파일 리스트 방식 + 드래그&드롭 옵션)
+성적서 검토 GUI (시료번호 목록 + 드래그&드롭 옵션)
 
-요구사항(사용자 피드백 반영):
-- PDF 생성기처럼 "파일 리스트(Listbox)" UI로 구성
+- eco_input_gui와 동일한 파일 추가 UI (Text + 오른쪽 세로 버튼)
 - 파일 추가 버튼 + (가능하면) 드래그&드롭
 - 추가된 항목 삭제(선택 삭제/전체 비우기)
 - 파일명에서 시료번호 자동 추출해서 기존 report_check.main(sample_list, user_name) 실행
@@ -15,7 +14,6 @@
 """
 
 import os
-import re
 import sys
 import threading
 import subprocess
@@ -37,8 +35,6 @@ if BASE_DIR not in sys.path:
 from config import REPORT_SRC
 
 DEFAULT_BROWSE_DIR = REPORT_SRC
-
-APP_VERSION = "FILELIST_v3_SAFE_DND"
 
 # ------------------------------
 # Drag & Drop (옵션)
@@ -96,11 +92,7 @@ def _parse_drop_files(data: str):
 
 
 def extract_sample_from_name(path_or_text: str) -> str:
-    """
-    파일/폴더명/텍스트에서 시료번호 추출
-    - 가장 흔한 패턴: A + 숫자(7~9) + - + 순번(1~2)
-      예) A2512313-03, A2501011-1 등
-    """
+    """파일/폴더명/텍스트에서 시료번호 추출."""
     return common_extract_sample_from_name(path_or_text)
 
 
@@ -111,13 +103,13 @@ class ReportCheckFileListGUI:
                 "실행 오류",
                 "필수 모듈 import 실패:\n"
                 f"{IMPORT_ERR}\n\n"
-                "report_check_gui_filelist.py, report_check.py, gui_common.py를 같은 폴더에 두고 실행해 주세요."
+                "report_check_gui.py, report_check.py, gui_common.py를 같은 폴더에 두고 실행해 주세요."
             )
             raise SystemExit(1)
 
-        self.files = []      # 원본 파일 경로
-        self.samples = []    # 추출된 시료번호(중복 제거)
+        self.files = []      # 원본 파일 경로 (추가 순서 유지)
         self._stop = False
+        self._dnd_fail_msg = None
 
         # tkinterdnd2(tkdnd) 로딩이 PC에 따라 실패할 수 있어 안전 fallback
         global HAS_DND
@@ -127,23 +119,18 @@ class ReportCheckFileListGUI:
             except Exception as e:
                 HAS_DND = False
                 self.root = tk.Tk()
-                try:
-                    messagebox.showwarning(
-                        '드래그&드롭 비활성화',
-                        'tkinterdnd2(tkdnd) 로딩 실패로 드래그&드롭을 끕니다.\n'                        '파일 추가 버튼으로 사용하세요.\n\n'                        + ('원인: ' + str(e))
-                    )
-                except Exception:
-                    pass
+                self._dnd_fail_msg = str(e)
         else:
             self.root = tk.Tk()
-        self.root.title("성적서 검토 - 파일 리스트 - " + APP_VERSION)
-        self.root.geometry("600x650")
-        self.root.minsize(550, 620)
+        self.root.title("성적서 검토")
+        self.root.geometry("400x650")
+        self.root.minsize(380, 620)
 
         self._build_ui()
         self._setup_cleanup()
 
-        self._log(f"[INFO] 버전: {APP_VERSION}")
+        if self._dnd_fail_msg:
+            self._log(f"[INFO] 드래그&드롭 비활성화 (원인: {self._dnd_fail_msg})")
         self._log(f"[INFO] DragDrop 사용: {HAS_DND}")
         self._log("[INFO] 드래그&드롭이 안 되면 '파일 추가...' 버튼으로 진행하세요.")
 
@@ -160,75 +147,68 @@ class ReportCheckFileListGUI:
         top.columnconfigure(1, weight=1)
 
         ttk.Label(top, text="이름(결과 저장용):").grid(row=0, column=0, sticky="w")
-        
-        # ✅ [추가] NAS 개인업무 폴더를 뒤져서 직원 이름(폴더명) 목록을 자동으로 가져오기
+
         from config import USER_ROOT
         base_dir = USER_ROOT
         user_list = []
         try:
             if os.path.exists(base_dir):
-                # ✅ [수정] 폴더이면서 동시에 이름 맨 앞글자가 '#', '.', '_' 가 아닌 것만 골라내기
                 user_list = [
-                    d for d in os.listdir(base_dir) 
+                    d for d in os.listdir(base_dir)
                     if os.path.isdir(os.path.join(base_dir, d)) and not d.startswith(('#', '.', '_', '0'))
                 ]
-                user_list.sort() # 가나다순 정렬
+                user_list.sort()
         except Exception:
             pass
 
-        # ✅ [수정] 일반 입력창(Entry) 대신 드롭다운(Combobox) 사용
         self.ent_name = ttk.Combobox(top, values=user_list, state="readonly")
         self.ent_name.grid(row=0, column=1, sticky="ew", padx=6)
-        
-        # 2) 파일 리스트
+
+        # 2) 시료번호 목록 (eco_input_gui 스타일)
         mid = ttk.LabelFrame(outer, text="성적서 엑셀 파일", padding=10)
         mid.grid(row=1, column=0, sticky="nsew", pady=(10, 10))
         mid.columnconfigure(0, weight=1)
-        mid.rowconfigure(1, weight=1)
 
-        hint = "드래그&드롭 가능" if HAS_DND else "드래그&드롭 미지원(설치 필요: pip install tkinterdnd2)"
-        ttk.Label(mid, text=f"※ {hint} | 허용: .xls/.xlsx/.xlsm (파일명에서 시료번호 자동 추출)", foreground="gray").grid(
-            row=0, column=0, sticky="w"
+        ttk.Label(
+            mid,
+            text="시료번호 (줄바꿈 구분):  파일 드래그 또는 파일추가 버튼 사용",
+            foreground="gray",
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+
+        self.txt_samples = tk.Text(
+            mid, width=28, height=6,
+            relief="flat", highlightthickness=1,
+            highlightbackground="black", highlightcolor="black",
         )
+        self.txt_samples.grid(row=1, column=0, sticky="nsew", pady=3)
+
+        file_btns = ttk.Frame(mid)
+        file_btns.grid(row=1, column=1, sticky="ns", padx=(8, 0))
+        ttk.Button(file_btns, text="파일 추가...", command=self._add_files_dialog).pack(fill="x", pady=2)
+        ttk.Button(file_btns, text="선택 삭제", command=self._remove_selected).pack(fill="x", pady=2)
+        ttk.Button(file_btns, text="전체 비우기", command=self._clear_all).pack(fill="x", pady=2)
         if not HAS_DND:
-            ttk.Button(mid, text="드래그&드롭 활성화(설치)", command=self._install_dnd).grid(row=0, column=1, sticky="e")
+            ttk.Button(file_btns, text="DnD 설치", command=self._install_dnd).pack(fill="x", pady=(8, 2))
 
-        self.lst = tk.Listbox(mid, height=10, selectmode="extended")
-        self.lst.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
-
-        sb = ttk.Scrollbar(mid, orient="vertical", command=self.lst.yview)
-        sb.grid(row=1, column=1, sticky="ns", pady=(8, 0))
-        self.lst.configure(yscrollcommand=sb.set)
-
-        # 드롭 전용 라벨(일부 환경에서 listbox/text 드롭이 씹혀도 라벨은 되는 경우가 있음)
-        self.lbl_drop = ttk.Label(mid, text="여기에 엑셀 파일을 드래그&드롭", anchor="center", relief="groove")
-        self.lbl_drop.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0), ipady=6)
-
-        btns = ttk.Frame(mid)
-        btns.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        btns.columnconfigure(0, weight=1)
-        btns.columnconfigure(1, weight=1)
-        btns.columnconfigure(2, weight=1)
-
-        ttk.Button(btns, text="파일 추가...", command=self._add_files_dialog).grid(row=0, column=0, sticky="ew", padx=4)
-        ttk.Button(btns, text="선택 삭제", command=self._remove_selected).grid(row=0, column=1, sticky="ew", padx=4)
-        ttk.Button(btns, text="전체 비우기", command=self._clear_all).grid(row=0, column=2, sticky="ew", padx=4)
+        self.lbl_drop = ttk.Label(
+            mid,
+            text="여기에 파일을 드래그&드롭",
+            anchor="center",
+            relief="groove",
+        )
+        self.lbl_drop.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 0), ipady=3)
 
         # 3) 실행/진행
         runbox = ttk.Frame(outer)
         runbox.grid(row=2, column=0, sticky="ew")
         runbox.columnconfigure(0, weight=1)
         runbox.columnconfigure(1, weight=1)
-        runbox.columnconfigure(2, weight=1)
 
         self.btn_run = ttk.Button(runbox, text="실행", command=self._on_run)
-        self.btn_run.grid(row=0, column=0, sticky="ew", padx=4)
+        self.btn_run.grid(row=0, column=0, sticky="ew", padx=(0, 4))
 
         self.btn_cancel = ttk.Button(runbox, text="취소", command=self._on_cancel, state="disabled")
-        self.btn_cancel.grid(row=0, column=1, sticky="ew", padx=4)
-
-        self.btn_quit = ttk.Button(runbox, text="닫기", command=self.root.destroy)
-        self.btn_quit.grid(row=0, column=2, sticky="ew", padx=4)
+        self.btn_cancel.grid(row=0, column=1, sticky="ew", padx=(4, 0))
 
         self.progress = ttk.Progressbar(outer, mode="determinate")
         self.progress.grid(row=3, column=0, sticky="ew", pady=(8, 0))
@@ -245,21 +225,12 @@ class ReportCheckFileListGUI:
 
         # DND 등록
         if HAS_DND:
-            try:
-                self.lst.drop_target_register(DND_FILES)
-                self.lst.dnd_bind("<<Drop>>", self._on_drop)
-            except Exception:
-                pass
-            try:
-                self.lbl_drop.drop_target_register(DND_FILES)
-                self.lbl_drop.dnd_bind("<<Drop>>", self._on_drop)
-            except Exception:
-                pass
-            try:
-                self.root.drop_target_register(DND_FILES)
-                self.root.dnd_bind("<<Drop>>", self._on_drop)
-            except Exception:
-                pass
+            for widget in (self.txt_samples, self.lbl_drop, mid, self.root):
+                try:
+                    widget.drop_target_register(DND_FILES)
+                    widget.dnd_bind("<<Drop>>", self._on_drop)
+                except Exception:
+                    pass
 
     def _setup_cleanup(self):
         def on_close():
@@ -277,13 +248,30 @@ class ReportCheckFileListGUI:
             pass
 
     # ---------------- file list ops ----------------
-    def _refresh_listbox(self):
-        self.lst.delete(0, "end")
+    def _refresh_text(self):
+        """self.files 순서대로 시료번호(없으면 파일명)를 Text에 표시."""
+        lines = []
         for p in self.files:
             sn = extract_sample_from_name(p)
-            file_name = os.path.basename(p)
-            show = f"{sn}  |  {file_name}" if sn else file_name
-            self.lst.insert("end", show)
+            lines.append(sn if sn else os.path.basename(p))
+        self.txt_samples.configure(state="normal")
+        self.txt_samples.delete("1.0", "end")
+        if lines:
+            self.txt_samples.insert("1.0", "\n".join(lines))
+
+    def _selected_line_indices(self):
+        """Text 선택 영역에 해당하는 0-based 줄 인덱스 목록."""
+        try:
+            first = self.txt_samples.index("sel.first")
+            last = self.txt_samples.index("sel.last")
+        except tk.TclError:
+            return []
+
+        start_line = int(float(first))
+        end_line = int(float(last))
+        if last.endswith(".0") and float(last) > float(first):
+            end_line -= 1
+        return list(range(start_line - 1, end_line))
 
     def _add_paths(self, paths):
         added = 0
@@ -292,7 +280,6 @@ class ReportCheckFileListGUI:
             if not p:
                 continue
             if os.path.isdir(p):
-                # 폴더가 드롭되면 폴더 안의 엑셀을 1단만 스캔
                 try:
                     for fn in os.listdir(p):
                         full = os.path.join(p, fn)
@@ -312,7 +299,7 @@ class ReportCheckFileListGUI:
                     added += 1
 
         if added:
-            self._refresh_listbox()
+            self._refresh_text()
             self._log(f"[INFO] 파일 {added}개 추가됨 (총 {len(self.files)}개)")
         else:
             self._log("[INFO] 추가된 파일이 없습니다. (중복/확장자/경로 확인)")
@@ -321,27 +308,27 @@ class ReportCheckFileListGUI:
         paths = filedialog.askopenfilenames(
             title="성적서 엑셀 파일 선택",
             initialdir=DEFAULT_BROWSE_DIR,
-            filetypes=[("Excel files", "*.xls;*.xlsx;*.xlsm"), ("All files", "*.*")]
+            filetypes=[("Excel files", "*.xlsx;*.xlsm;*.xls"), ("All files", "*.*")],
+            parent=self.root,
         )
         if paths:
             self._add_paths(list(paths))
 
     def _remove_selected(self):
-        idxs = list(self.lst.curselection())
+        idxs = self._selected_line_indices()
         if not idxs:
+            messagebox.showinfo("안내", "삭제할 텍스트를 마우스로 선택하세요.", parent=self.root)
             return
         for i in reversed(idxs):
-            # listbox에는 "sn | path"로 표시되므로 원본 files 인덱스 그대로 사용
-            try:
+            if 0 <= i < len(self.files):
                 del self.files[i]
-            except Exception:
-                pass
-        self._refresh_listbox()
+        self._refresh_text()
         self._log(f"[INFO] 선택 삭제 완료 (총 {len(self.files)}개)")
 
     def _clear_all(self):
         self.files = []
-        self.lst.delete(0, "end")
+        self.txt_samples.configure(state="normal")
+        self.txt_samples.delete("1.0", "end")
         self._log("[INFO] 전체 비움 완료")
 
     # ---------------- DND ----------------
@@ -364,7 +351,6 @@ class ReportCheckFileListGUI:
 
     def _install_dnd(self):
         try:
-            import subprocess, sys
             subprocess.check_call([sys.executable, "-m", "pip", "install", "tkinterdnd2"])
             messagebox.showinfo(
                 "완료",
@@ -384,7 +370,6 @@ class ReportCheckFileListGUI:
             messagebox.showerror("오류", "엑셀 파일을 1개 이상 추가하세요.")
             return
 
-        # 파일 목록에서 시료번호 추출
         sample_list = []
         bad = []
         for p in self.files:
@@ -413,7 +398,6 @@ class ReportCheckFileListGUI:
                 if pythoncom is not None:
                     pythoncom.CoInitialize()
 
-                # stdout 모니터로 진행률 업데이트(기존 GUI와 동일 방식)
                 import sys as _sys
                 original_stdout = _sys.stdout
 

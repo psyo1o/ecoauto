@@ -54,6 +54,13 @@ from measin_utils import (
     open_sample_detail as _open_sample_detail,
     go_back_to_list as _go_back_to_list,
     is_field_list_ready as _is_field_list_ready,
+    ensure_detail_page_for_tab1,
+    reopen_sample_from_search,
+    recover_site_session,
+    open_detail_with_session_recovery,
+    ensure_logged_in_or_recover,
+    is_logged_out,
+    MAX_SAMPLE_DETAIL_RETRY,
     collect_samples_from_files,
     LOGIN_URL, FIELD_URL, NAS_BASE, NAS_DIRS
 )
@@ -102,7 +109,7 @@ from water_input_utils import (
     save_water_tab4_complete,
     open_water_tab4,
     water_tab4_tab_clickable,
-    WATER_DETAIL_WAIT_SEL,
+    WATER_DETAIL_ENTRY_SEL,
 )
 
 # =====================================================================
@@ -330,45 +337,6 @@ def _is_tab2_site_completed(save_ok, do_pdf_upload, did_pdf, pdf_deleted):
         return bool(did_pdf and pdf_deleted)
     return True
 
-
-def recover_site_session(driver, login_id, login_pw, date_str=None, field_url=FIELD_URL):
-    """세션 만료 시 확인창 처리 후 로그인·목록 검색까지 복구."""
-    print("▶ 로그인 세션 만료 → 확인창 처리 후 재로그인")
-    for label in ("세션복구1", "세션복구2", "세션복구3"):
-        _accept_all_alerts(driver, total_wait=4.0, poll=0.2, max_accept=12, label=label)
-        close_popup(driver)
-        time.sleep(0.3)
-
-    login(driver, login_id, login_pw, field_url=field_url)
-    if date_str:
-        search_date(driver, date_str, date_str)
-
-
-def open_detail_with_session_recovery(
-    driver,
-    sample_no,
-    login_id,
-    login_pw,
-    date_str=None,
-    field_url=FIELD_URL,
-    max_recover=5,
-    detail_wait_sel="#machineDiv",
-):
-    """상세 진입 실패 시 목록 검색창이 없으면 재로그인 후 같은 시료부터 재시도."""
-    recover_count = 0
-    while True:
-        if open_detail_by_sample(driver, sample_no, detail_wait_sel=detail_wait_sel):
-            return True
-
-        if _is_field_list_ready(driver):
-            return False
-
-        if recover_count >= max_recover:
-            print("❌ 세션 복구 반복 한도 초과 → 상세 진입 중단")
-            return False
-
-        recover_count += 1
-        recover_site_session(driver, login_id, login_pw, date_str=date_str, field_url=field_url)
 
 # =====================================================================
 # 탭1 입력
@@ -1153,7 +1121,7 @@ def build_water_record_copy_path(excel_path: str) -> str:
 
 
 def build_final_path_water(excel_path: str, sample_no: str) -> str:
-    """수질 PDF 최종 저장 경로.
+    r"""수질 PDF 최종 저장 경로.
     → PDF_BASE_DIR_WATER\YYYY년\{대행기록부 D3, 공백제거}\파일명.pdf
     """
     yyyy_full = f"20{sample_no[1:3]}"        # "26" → "2026"
@@ -1746,85 +1714,132 @@ def _main_water(
         if is_cancelled(cancel_event):
             break
 
-        # 수질: 날짜 범위 검색 생략 → 목록에서 시료번호만 검색 후 상세 진입
-        if not open_detail_with_session_recovery(
-            driver,
-            sample,
-            login_id,
-            login_pw,
-            date_str=None,
-            field_url=FIELD_URL_WATER,
-            detail_wait_sel=WATER_DETAIL_WAIT_SEL,
-        ):
-            print("❌ 상세페이지 진입 실패 → 다음 시료로")
+        site_input_ok = False
+        for sample_attempt in range(1, MAX_SAMPLE_DETAIL_RETRY + 1):
+            if is_cancelled(cancel_event):
+                break
+
+            if not ensure_logged_in_or_recover(
+                driver,
+                login_id,
+                login_pw,
+                field_url=FIELD_URL_WATER,
+            ):
+                break
+
+            if sample_attempt == 1:
+                opened = open_detail_with_session_recovery(
+                    driver,
+                    sample,
+                    login_id,
+                    login_pw,
+                    date_str=None,
+                    field_url=FIELD_URL_WATER,
+                    detail_wait_sel=WATER_DETAIL_ENTRY_SEL,
+                )
+            else:
+                opened = reopen_sample_from_search(
+                    driver,
+                    sample,
+                    detail_wait_sel=WATER_DETAIL_ENTRY_SEL,
+                    login_id=login_id,
+                    login_pw=login_pw,
+                    field_url=FIELD_URL_WATER,
+                )
+
+            if not opened:
+                if sample_attempt < MAX_SAMPLE_DETAIL_RETRY:
+                    continue
+                print("❌ 상세페이지 진입 실패 → 다음 시료로")
+                break
+
+            if not ensure_detail_page_for_tab1(
+                driver, detail_wait_sel=WATER_DETAIL_ENTRY_SEL
+            ):
+                if sample_attempt < MAX_SAMPLE_DETAIL_RETRY:
+                    back_to_list(driver)
+                    continue
+                print("❌ 상세 페이지 확인 실패 → 다음 시료로")
+                break
+
+            site_input_ok = True
+            try:
+                if do_tab2:
+                    fill_water_tab2(driver)
+                    if not save_water_tab2(driver):
+                        print("⚠ 수질 탭2 입력완료 저장 실패")
+                        site_input_ok = False
+                elif do_tab4 and not water_tab4_tab_clickable(driver):
+                    print("▶ 수질 탭4 선택 — 탭2 미완료로 탭4 비활성 → 탭2 입력완료 선행")
+                    fill_water_tab2(driver)
+                    if not save_water_tab2(driver):
+                        print("❌ 탭2 입력완료 실패")
+                        site_input_ok = False
+                elif do_tab4:
+                    print("▶ 수질 탭2 스킵 (탭2 완료된 상태로 탭4만 진행)")
+                else:
+                    print("▶ 수질 탭2 스킵")
+
+                pdfs = None
+                if do_tab4 and site_input_ok:
+                    if not open_water_tab4(driver):
+                        print("❌ 수질 탭4 진입 실패")
+                        site_input_ok = False
+                    else:
+                        print("▶ 수질 탭4 매크로 엑셀 읽는중")
+                        tab4_meta = read_water_tab4_from_macro_xlsm(sample)
+                        print("✅ 수질 탭4 데이터 읽기 완료")
+
+                        fill_water_tab4_dates(driver, tab4_meta)
+                        time.sleep(0.5)
+                        fill_water_tab4_grid(driver, tab4_meta)
+
+                        if do_pdf_final:
+                            print("▶ 수질 PDF 생성/업로드중")
+                            open_water_tab4(driver)
+                            pdfs = make_tab4_pdfs_water(path, sample)
+                            upload_tab4_pdfs(
+                                driver,
+                                pdfs["pdf_analy"],
+                                pdfs["pdf_record"],
+                                f1_sel=WATER_FILE_BTN1,
+                                f2_sel=WATER_FILE_BTN2,
+                            )
+                            if save_water_tab4_complete(driver):
+                                print(f"✅ 수질 탭4 분석완료 → {pdfs['p_out']}")
+                                if pdfs.get("p_record_copy"):
+                                    print(
+                                        f"   ↳ 대행기록부 PDF → {pdfs['p_record_copy']}"
+                                    )
+                            else:
+                                print("⚠ 수질 탭4 분석완료 저장 실패")
+                                site_input_ok = False
+                        else:
+                            save_water_tab4_temp(driver)
+
+                        if pdfs:
+                            cleanup_tmp_pdfs(PDF_TMP_DIR, sample)
+                elif not do_tab4:
+                    print("▶ 수질 탭4 스킵")
+            except Exception as e:
+                site_input_ok = False
+                print(f"⚠ 수질 시료 처리 오류 ({sample}): {e}")
+                if is_logged_out(driver):
+                    recover_site_session(
+                        driver,
+                        login_id,
+                        login_pw,
+                        field_url=FIELD_URL_WATER,
+                    )
+
+            if site_input_ok:
+                break
+            if sample_attempt < MAX_SAMPLE_DETAIL_RETRY:
+                back_to_list(driver)
+
+        if not site_input_ok:
             idx += 1
             continue
-
-        if is_cancelled(cancel_event):
-            break
-
-        # ── 탭2 (측정분석결과 #ui-id-4 는 탭2 입력완료 후에만 활성) ──
-        if do_tab2:
-            fill_water_tab2(driver)
-            if not save_water_tab2(driver):
-                print("⚠ 수질 탭2 입력완료 저장 실패")
-                if do_tab4:
-                    print("❌ 탭2 미완료 → 탭4 불가, 다음 시료로")
-                    idx += 1
-                    continue
-        elif do_tab4 and not water_tab4_tab_clickable(driver):
-            print("▶ 수질 탭4 선택 — 탭2 미완료로 탭4 비활성 → 탭2 입력완료 선행")
-            fill_water_tab2(driver)
-            if not save_water_tab2(driver):
-                print("❌ 탭2 입력완료 실패 → 탭4 불가, 다음 시료로")
-                idx += 1
-                continue
-        elif do_tab4:
-            print("▶ 수질 탭2 스킵 (탭2 완료된 상태로 탭4만 진행)")
-        else:
-            print("▶ 수질 탭2 스킵")
-
-        # ── 탭4 ──
-        pdfs = None
-        if do_tab4:
-            if not open_water_tab4(driver):
-                print("❌ 수질 탭4 진입 실패 → 다음 시료로")
-                idx += 1
-                continue
-
-            print("▶ 수질 탭4 매크로 엑셀 읽는중")
-            tab4_meta = read_water_tab4_from_macro_xlsm(sample)
-            print("✅ 수질 탭4 데이터 읽기 완료")
-
-            fill_water_tab4_dates(driver, tab4_meta)
-            time.sleep(0.5)
-            fill_water_tab4_grid(driver, tab4_meta)
-
-            if do_pdf_final:
-                print("▶ 수질 PDF 생성/업로드중")
-                open_water_tab4(driver)
-                pdfs = make_tab4_pdfs_water(path, sample)
-                upload_tab4_pdfs(
-                    driver,
-                    pdfs["pdf_analy"],
-                    pdfs["pdf_record"],
-                    f1_sel=WATER_FILE_BTN1,
-                    f2_sel=WATER_FILE_BTN2,
-                )
-                if save_water_tab4_complete(driver):
-                    print(f"✅ 수질 탭4 분석완료 → {pdfs['p_out']}")
-                    if pdfs.get("p_record_copy"):
-                        print(f"   ↳ 대행기록부 PDF → {pdfs['p_record_copy']}")
-                else:
-                    print("⚠ 수질 탭4 분석완료 저장 실패")
-            else:
-                # 탭4만 선택 시 임시저장 (PDF 없으면 분석완료 버튼 사용 안 함)
-                save_water_tab4_temp(driver)
-
-            if pdfs:
-                cleanup_tmp_pdfs(PDF_TMP_DIR, sample)
-        else:
-            print("▶ 수질 탭4 스킵")
 
         back_to_list(driver)
         idx += 1
@@ -2031,118 +2046,172 @@ def _main_air(
                 continue
 
             need_detail = any([do_tab1, do_tab2, do_tab4])
+            excel = parse_measuring_record(path, sample)
+            site_input_ok = not need_detail
+
             if need_detail:
                 if is_cancelled(cancel_event):
                     break
                 if site_tab2_done:
                     print(f"▶ {sample} 탭2 저장/PDF 완료 → 탭4만 진행")
-                if not open_detail_with_session_recovery(
-                    driver, sample, login_id, login_pw, date_str=date_str
-                ):
-                    print("❌ 상세페이지 실패 → 다음 시료로")
+
+                for sample_attempt in range(1, MAX_SAMPLE_DETAIL_RETRY + 1):
+                    if is_cancelled(cancel_event):
+                        break
+
+                    if not ensure_logged_in_or_recover(
+                        driver, login_id, login_pw, date_str=date_str
+                    ):
+                        site_input_ok = False
+                        break
+
+                    if sample_attempt == 1:
+                        opened = open_detail_with_session_recovery(
+                            driver, sample, login_id, login_pw, date_str=date_str
+                        )
+                    else:
+                        opened = reopen_sample_from_search(
+                            driver,
+                            sample,
+                            login_id=login_id,
+                            login_pw=login_pw,
+                            date_str=date_str,
+                        )
+
+                    if not opened:
+                        if sample_attempt < MAX_SAMPLE_DETAIL_RETRY:
+                            continue
+                        print("❌ 상세페이지 실패 → 다음 시료로")
+                        break
+
+                    if not ensure_detail_page_for_tab1(driver):
+                        if sample_attempt < MAX_SAMPLE_DETAIL_RETRY:
+                            back_to_list(driver)
+                            continue
+                        print("❌ 상세 페이지 확인 실패 → 다음 시료로")
+                        break
+
+                    site_input_ok = True
+                    try:
+                        if do_tab1 and not site_tab2_done:
+                            safe_click(driver, "#ui-id-1")
+                            fill_tab1(driver, excel, is_dust)
+                        elif not do_tab1:
+                            print("▶ 탭1 스킵")
+
+                        if do_tab2 and not site_tab2_done:
+                            safe_click(driver, "#ui-id-2")
+                            fill_tab2(driver, excel, is_dust)
+                            set_date_js(driver, SEL_DATE, date_str)
+
+                            if not is_dust:
+                                fill_facility_rows(driver, parse_facility_from_excel(path))
+                            else:
+                                print("▶ 비산먼지 → 배출시설 스킵")
+                                ensure_gas_flow_checkbox_checked(driver)
+
+                            write_sampler_comment(driver)
+                            rg2_fill_measure_grid_api(
+                                driver, sample, read_realgird_values(path)
+                            )
+
+                            did_pdf = False
+                            pdf_path = None
+                            if do_pdf_upload:
+                                try:
+                                    pdf_path = export_pdf_from_excel(path, sample, is_dust)
+                                    print(f"▶ PDF 생성 완료: {pdf_path}")
+                                    if not trigger_file_dialog(driver, timeout=8):
+                                        raise RuntimeError("파일추가 트리거 실패")
+                                    time.sleep(0.8)
+                                    pick_file_in_open_dialog(pdf_path, timeout=30)
+                                    print("✅ 파일 선택 완료")
+                                    did_pdf = True
+                                except Exception as e:
+                                    print(f"❌ PDF 실패: {e}")
+                                    site_input_ok = False
+                            else:
+                                print("▶ PDF 업로드 스킵")
+                            time.sleep(1)
+
+                            draft_by_time = _should_draft_by_sampling_end(
+                                date_str, excel.get("채취끝", "")
+                            )
+                            use_final_save = did_pdf and not draft_by_time
+                            print(
+                                f"▶ 탭2 {'✅입력완료' if use_final_save else '⚠임시저장'}"
+                            )
+                            ok = save_tab2(driver, use_final_save=use_final_save)
+
+                            pdf_deleted = False
+                            if ok and did_pdf and pdf_path and os.path.isfile(pdf_path):
+                                try:
+                                    os.remove(pdf_path)
+                                    pdf_deleted = True
+                                    print(f"🗑 PDF 삭제: {pdf_path}")
+                                except Exception as e:
+                                    print(f"⚠ PDF 삭제 실패: {e}")
+
+                            if _is_tab2_site_completed(
+                                ok, do_pdf_upload, did_pdf, pdf_deleted
+                            ):
+                                tab2_done_samples.add(sample)
+                            else:
+                                site_input_ok = False
+                                print("⚠ 탭2 저장 미완료 → 시료 검색부터 재시도")
+                        elif do_tab2 and site_tab2_done:
+                            print("▶ 탭2 스킵(이미 처리됨)")
+                        else:
+                            print("▶ 탭2 스킵")
+
+                        if do_tab4 and site_input_ok:
+                            safe_click(driver, TAB4_SELECTOR)
+                            wait_el(driver, "#smpl_rcpt_dt", timeout=10)
+
+                            print("▶ 탭4 데이터 읽는중")
+                            tab4_meta = read_tab4_from_macro_xlsm(sample)
+                            print("✅ 탭4 데이터 읽기 완료")
+
+                            fill_tab4_dates(driver, sample, tab4_meta)
+                            fill_tab4_grid_only(driver, tab4_meta["rows"])
+
+                            pdfs = None
+                            if do_pdf_final:
+                                print("▶ PDF 탭4 생성중")
+                                pdfs = make_tab4_pdfs(path, sample)
+                                upload_tab4_pdfs(
+                                    driver, pdfs["pdf_analy"], pdfs["pdf_record"]
+                                )
+                                print("✅ PDF 탭4 완료")
+
+                            if do_pdf_final:
+                                tab4_comp_save(driver)
+                                print("✅ 탭4 입력완료")
+                            else:
+                                tab4_temp_save(driver)
+                                print("⚠ 탭4임시저장")
+
+                            if pdfs:
+                                cleanup_tmp_pdfs(PDF_TMP_DIR, sample)
+                    except Exception as e:
+                        site_input_ok = False
+                        print(f"⚠ 시료 처리 오류 ({sample}): {e}")
+                        if is_logged_out(driver):
+                            recover_site_session(
+                                driver,
+                                login_id,
+                                login_pw,
+                                date_str=date_str,
+                            )
+
+                    if site_input_ok:
+                        break
+                    if sample_attempt < MAX_SAMPLE_DETAIL_RETRY:
+                        back_to_list(driver)
+
+                if not site_input_ok:
                     idx += 1
                     continue
-
-            excel = parse_measuring_record(path, sample)
-
-            # 탭1
-            if do_tab1 and not site_tab2_done:
-                safe_click(driver, "#ui-id-1")
-                fill_tab1(driver, excel, is_dust)
-            elif not do_tab1:
-                print("▶ 탭1 스킵")
-
-            # 탭2
-            if do_tab2 and not site_tab2_done:
-                if is_cancelled(cancel_event):
-                    break
-                safe_click(driver, "#ui-id-2")
-                fill_tab2(driver, excel, is_dust)
-                set_date_js(driver, SEL_DATE, date_str)
-
-                if not is_dust:
-                    fill_facility_rows(driver, parse_facility_from_excel(path))
-                else:
-                    print("▶ 비산먼지 → 배출시설 스킵")
-                    ensure_gas_flow_checkbox_checked(driver)
-
-                write_sampler_comment(driver)
-
-                GRID_ROOT = "#measGridAnalySampAnzeDataAirItemList1"
-                rg2_fill_measure_grid_api(driver, sample, read_realgird_values(path))
-
-                # PDF 업로드
-                did_pdf  = False
-                pdf_path = None
-                if do_pdf_upload:
-                    try:
-                        pdf_path = export_pdf_from_excel(path, sample, is_dust)
-                        print(f"▶ PDF 생성 완료: {pdf_path}")
-                        if not trigger_file_dialog(driver, timeout=8):
-                            raise RuntimeError("파일추가 트리거 실패")
-                        time.sleep(0.8)
-                        pick_file_in_open_dialog(pdf_path, timeout=30)
-                        print("✅ 파일 선택 완료")
-                        did_pdf = True
-                    except Exception as e:
-                        print(f"❌ PDF 실패: {e}")
-                else:
-                    print("▶ PDF 업로드 스킵")
-                time.sleep(1)
-
-                draft_by_time  = _should_draft_by_sampling_end(date_str, excel.get("채취끝", ""))
-                use_final_save = did_pdf and not draft_by_time
-                print(f"▶ 탭2 {'✅입력완료' if use_final_save else '⚠임시저장'}")
-                ok = save_tab2(driver, use_final_save=use_final_save)
-
-                pdf_deleted = False
-                if ok and did_pdf and pdf_path and os.path.isfile(pdf_path):
-                    try:
-                        os.remove(pdf_path)
-                        pdf_deleted = True
-                        print(f"🗑 PDF 삭제: {pdf_path}")
-                    except Exception as e:
-                        print(f"⚠ PDF 삭제 실패: {e}")
-
-                if _is_tab2_site_completed(ok, do_pdf_upload, did_pdf, pdf_deleted):
-                    tab2_done_samples.add(sample)
-                elif not ok:
-                    print("⚠ 탭2 저장 실패 → 재시도 대상")
-            elif do_tab2 and site_tab2_done:
-                print("▶ 탭2 스킵(이미 처리됨)")
-            else:
-                print("▶ 탭2 스킵")
-
-            # 탭4
-            if do_tab4:
-                if is_cancelled(cancel_event):
-                    break
-                safe_click(driver, TAB4_SELECTOR)
-                wait_el(driver, "#smpl_rcpt_dt", timeout=10)
-
-                print("▶ 탭4 데이터 읽는중")
-                tab4_meta = read_tab4_from_macro_xlsm(sample)
-                print("✅ 탭4 데이터 읽기 완료")
-
-                fill_tab4_dates(driver, sample, tab4_meta)
-                fill_tab4_grid_only(driver, tab4_meta["rows"])
-
-                pdfs = None
-                if do_pdf_final:
-                    print("▶ PDF 탭4 생성중")
-                    pdfs = make_tab4_pdfs(path, sample)
-                    upload_tab4_pdfs(driver, pdfs["pdf_analy"], pdfs["pdf_record"])
-                    print("✅ PDF 탭4 완료")
-
-                if do_pdf_final:
-                    tab4_comp_save(driver)
-                    print("✅ 탭4 입력완료")
-                else:
-                    tab4_temp_save(driver)
-                    print("⚠ 탭4임시저장")
-
-                if pdfs:
-                    cleanup_tmp_pdfs(PDF_TMP_DIR, sample)
 
             back_to_list(driver)
             idx += 1

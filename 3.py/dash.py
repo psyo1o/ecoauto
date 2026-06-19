@@ -12,6 +12,7 @@ from typing import List, Tuple, Dict, Any, Optional, Set
 
 import pandas as pd
 import openpyxl
+from openpyxl.utils import get_column_letter
 import threading
 import queue
 import tkinter as tk
@@ -629,7 +630,10 @@ def write_dashboard_excel(out_path: str, summary_df: pd.DataFrame, detail_df: pd
         cur_row = _write_section("차량중복", causes["차량중복(차량별)"], causes["차량중복(사례)"], cur_row)
 
         for sheet_name in ("대시보드", "상세", "원인집계"):
-            autofit_columns(w.sheets[sheet_name], "A")
+            ws_fit = w.sheets[sheet_name]
+            if ws_fit.max_column >= 1:
+                last_col = get_column_letter(ws_fit.max_column)
+                autofit_columns(ws_fit, f"A:{last_col}")
 
 #--------------GUI-------------
 class DashGUI:

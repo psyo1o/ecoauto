@@ -30,7 +30,8 @@ WATER_TAB4_READY_SELECTORS = (
     "#anze_start_dt",
     "#smpl_rcpt_dt",
 )
-WATER_DETAIL_WAIT_SEL = "#samp_vesl_code"   # 상세 진입 후 탭2 필드 대기
+WATER_DETAIL_ENTRY_SEL = "a#ui-id-2"        # 상세 진입 검증용 (탭 링크, 표시됨)
+WATER_DETAIL_WAIT_SEL = "#samp_vesl_code"   # 탭2 전환 후 필드 대기
 
 # 탭2 고정 입력값 (요청 사양)
 WATER_TAB2_VESSEL = "PE"
