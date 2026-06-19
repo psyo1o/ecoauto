@@ -15,13 +15,19 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 
-from selenium_utils import safe_click, set_date_js, close_popup, wait_el
+from selenium_utils import safe_click, set_date_js, close_popup, wait_el, accept_all_alerts
 from config import REPORT_BASE, REPORT_WORKFLOW_DIRS, LOGIN_URL, FIELD_URL
 
 NAS_BASE = REPORT_BASE
 NAS_DIRS = REPORT_WORKFLOW_DIRS
+
+# 로그인 페이지 ID 입력란 — 보이면 로그아웃(세션 만료) 상태
+LOGIN_ID_SEL = "#user_email"
+LOGIN_PW_SEL = "#login_pwd_confirm"
+LOGIN_BTN_SEL = "#login"
+
 # ======================================================================
-# 로그인
+# 로그인 / 로그아웃 감지
 # ======================================================================
 
 def _clear_and_fill_input(driver, selector: str, value: str, timeout: float = 10.0):
@@ -52,6 +58,60 @@ def _clear_and_fill_input(driver, selector: str, value: str, timeout: float = 10
         el.send_keys(str(value))
 
 
+def is_logged_out(driver, login_id_sel: str = LOGIN_ID_SEL) -> bool:
+    """ID 입력란이 보이면 로그아웃(세션 만료) 상태."""
+    try:
+        el = driver.find_element(By.CSS_SELECTOR, login_id_sel)
+        return el.is_displayed()
+    except Exception:
+        return False
+
+
+def dismiss_logout_alerts(driver, rounds: int = 3):
+    """로그아웃 시 연속으로 뜨는 확인창(2~3회) 처리."""
+    for i in range(1, rounds + 1):
+        accept_all_alerts(
+            driver,
+            total_wait=3.0,
+            poll=0.2,
+            max_accept=8,
+            label=f"로그아웃확인{i}",
+        )
+        close_popup(driver)
+        time.sleep(0.25)
+
+
+def ensure_logged_in_or_recover(
+    driver,
+    login_id: str,
+    login_pw: str,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    date_str: str | None = None,
+    field_url: str = FIELD_URL,
+    max_recover: int = 5,
+) -> bool:
+    """로그아웃 상태면 확인창 처리 후 재로그인. 로그인 유지 중이면 True."""
+    recover_count = 0
+    while is_logged_out(driver):
+        if recover_count >= max_recover:
+            print("❌ 로그아웃 복구 반복 한도 초과")
+            return False
+        recover_count += 1
+        print(f"▶ 로그아웃 감지 (ID 입력란) → 재로그인 ({recover_count}/{max_recover})")
+        recover_site_session(
+            driver,
+            login_id,
+            login_pw,
+            start_date=start_date,
+            end_date=end_date,
+            date_str=date_str,
+            field_url=field_url,
+        )
+    return True
+
+
 def login(driver, login_id: str, login_pw: str,
           login_url: str = LOGIN_URL,
           field_url: str = FIELD_URL):
@@ -59,22 +119,26 @@ def login(driver, login_id: str, login_pw: str,
     측정인.kr 로그인 후 현장측정분석(대기) 페이지로 이동.
     ID/PW 자동 입력 실패 시 사용자에게 직접 입력 요청.
     """
+    dismiss_logout_alerts(driver)
+
     print("[1] 로그인 페이지 이동")
-    driver.get(login_url)
-    time.sleep(2)
+    if not is_logged_out(driver):
+        driver.get(login_url)
+        time.sleep(2)
 
     try:
-        _clear_and_fill_input(driver, "#user_email", login_id)
-        _clear_and_fill_input(driver, "#login_pwd_confirm", login_pw)
+        _clear_and_fill_input(driver, LOGIN_ID_SEL, login_id)
+        _clear_and_fill_input(driver, LOGIN_PW_SEL, login_pw)
     except Exception:
         input("ID/PW 직접 입력 후 엔터")
 
     try:
-        driver.find_element(By.CSS_SELECTOR, "#login").click()
+        driver.find_element(By.CSS_SELECTOR, LOGIN_BTN_SEL).click()
     except Exception:
         input("로그인 후 엔터")
 
     time.sleep(3)
+    dismiss_logout_alerts(driver, rounds=2)
     close_popup(driver)
 
     media = "수질" if "field_water" in (field_url or "") else "대기"
@@ -120,11 +184,19 @@ def wait_grid_loaded(driver, timeout: float = 10, warn_msg: str = "⚠ RealGrid 
 
 def is_field_list_ready(driver, search_box: str = "#search_meas_mgmt_no") -> bool:
     """현장측정분석 목록 화면(시료번호 검색창)이 보이면 True."""
+    if is_logged_out(driver):
+        return False
     try:
-        driver.find_element(By.CSS_SELECTOR, search_box)
-        return True
+        return driver.find_element(By.CSS_SELECTOR, search_box).is_displayed()
     except Exception:
         return False
+
+
+def is_session_lost(driver) -> bool:
+    """로그아웃됐거나 목록 화면이 아니면 세션 복구 필요."""
+    if is_logged_out(driver):
+        return True
+    return not is_field_list_ready(driver)
 
 
 def get_samples_current_page(driver, prefix: str = "A") -> list:
@@ -142,15 +214,83 @@ def get_samples_current_page(driver, prefix: str = "A") -> list:
     return list(dict.fromkeys(arr))
 
 
+# 시료 상세 진입 실패 시 — 목록 복귀 후 시료번호 검색부터 재시도 (eco_input / eco_check 공통)
+MAX_SAMPLE_DETAIL_RETRY = 3
+
 # ======================================================================
 # 상세 페이지 진입
 # ======================================================================
+
+def _is_list_search_visible(driver, search_box: str = "#search_meas_mgmt_no") -> bool:
+    """목록 화면 시료번호 검색창이 보이면 True."""
+    try:
+        return driver.find_element(By.CSS_SELECTOR, search_box).is_displayed()
+    except Exception:
+        return False
+
+
+def verify_detail_page_opened(
+    driver,
+    detail_wait_sel: str = "#machineDiv",
+    search_box: str = "#search_meas_mgmt_no",
+    tab1_sel: str = "a#ui-id-1",
+    timeout: float = 10.0,
+) -> bool:
+    """
+    상세 페이지 진입 여부 검증.
+    - 목록 검색창이 보이지 않을 것
+    - detail_wait_sel 또는 tab1_sel 이 표시·클릭 가능할 것
+    """
+    markers = []
+    for sel in (detail_wait_sel, tab1_sel):
+        if sel and sel not in markers:
+            markers.append(sel)
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _is_list_search_visible(driver, search_box):
+            time.sleep(0.2)
+            continue
+        for sel in markers:
+            try:
+                el = WebDriverWait(driver, 0.5).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, sel))
+                )
+                if el.is_displayed():
+                    time.sleep(0.3)
+                    return True
+            except Exception:
+                continue
+        time.sleep(0.2)
+    return False
+
+
+def ensure_detail_page_for_tab1(
+    driver,
+    detail_wait_sel: str = "#machineDiv",
+    search_box: str = "#search_meas_mgmt_no",
+    tab1_sel: str = "a#ui-id-1",
+    timeout: float = 8.0,
+) -> bool:
+    """탭1 입력 직전 — 목록 화면이 아닌지·상세 탭1 요소가 준비됐는지 재확인."""
+    ok = verify_detail_page_opened(
+        driver,
+        detail_wait_sel=detail_wait_sel,
+        search_box=search_box,
+        tab1_sel=tab1_sel,
+        timeout=timeout,
+    )
+    if not ok:
+        print("❌ 상세 페이지 확인 실패 (목록 화면이거나 탭1 요소 없음)")
+    return ok
+
 
 def _try_find_sample_and_open(
     driver,
     sample_no: str,
     max_pages: int = 5,
     detail_wait_sel: str = "#machineDiv",
+    search_box: str = "#search_meas_mgmt_no",
 ) -> bool:
     """
     현재 페이지부터 max_pages까지 이동하며 sample_no를 더블클릭 → 상세 진입.
@@ -167,9 +307,10 @@ def _try_find_sample_and_open(
             driver.execute_script("arguments[0].scrollIntoView(true);", cell)
             time.sleep(0.15)
             ActionChains(driver).double_click(cell).perform()
-            wait_el(driver, detail_wait_sel, timeout=10)
-            time.sleep(0.3)
-            return True
+            if verify_detail_page_opened(
+                driver, detail_wait_sel, search_box, timeout=10.0
+            ):
+                return True
         except Exception:
             pass
 
@@ -214,7 +355,9 @@ def open_sample_detail(
     time.sleep(1.5)
 
     # 1차 시도
-    if _try_find_sample_and_open(driver, sample_no, max_pages, detail_wait_sel):
+    if _try_find_sample_and_open(
+        driver, sample_no, max_pages, detail_wait_sel, search_box
+    ):
         return True
 
     print(" → 1차 실패: 재검색 후 재시도")
@@ -225,11 +368,66 @@ def open_sample_detail(
         pass
 
     # 2차 시도
-    if _try_find_sample_and_open(driver, sample_no, max_pages, detail_wait_sel):
+    if _try_find_sample_and_open(
+        driver, sample_no, max_pages, detail_wait_sel, search_box
+    ):
         return True
 
     print(f" → 2차 실패: {sample_no} 없음")
     return False
+
+
+def reopen_sample_from_search(
+    driver,
+    sample_no: str,
+    detail_wait_sel: str = "#machineDiv",
+    search_box: str = "#search_meas_mgmt_no",
+    login_id: str | None = None,
+    login_pw: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    date_str: str | None = None,
+    field_url: str = FIELD_URL,
+) -> bool:
+    """목록 복귀 후 시료번호 검색·상세 진입 (시료 처리 재시도용)."""
+    print(f"▶ {sample_no} — 목록 복귀 후 시료 검색부터 재시도")
+
+    if login_id and login_pw:
+        if not ensure_logged_in_or_recover(
+            driver,
+            login_id,
+            login_pw,
+            start_date=start_date,
+            end_date=end_date,
+            date_str=date_str,
+            field_url=field_url,
+        ):
+            return False
+
+    if not is_field_list_ready(driver):
+        go_back_to_list(driver)
+        time.sleep(0.8)
+    if not is_field_list_ready(driver):
+        if login_id and login_pw and is_logged_out(driver):
+            if not ensure_logged_in_or_recover(
+                driver,
+                login_id,
+                login_pw,
+                start_date=start_date,
+                end_date=end_date,
+                date_str=date_str,
+                field_url=field_url,
+            ):
+                return False
+        if not is_field_list_ready(driver):
+            print("❌ 목록 화면 복귀 실패")
+            return False
+    return open_sample_detail(
+        driver,
+        sample_no,
+        search_box=search_box,
+        detail_wait_sel=detail_wait_sel,
+    )
 
 
 # ======================================================================
@@ -285,6 +483,84 @@ def go_back_to_list(driver,
     except Exception:
         print("⚠ 목록 화면 로딩 실패")
         return False
+
+
+# ======================================================================
+# 세션 만료 복구 (eco_input / eco_check 공통)
+# ======================================================================
+
+def recover_site_session(
+    driver,
+    login_id: str,
+    login_pw: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    date_str: str | None = None,
+    field_url: str = FIELD_URL,
+):
+    """세션 만료(로그아웃) 시 확인창 처리 후 로그인·날짜 검색까지 복구."""
+    if is_logged_out(driver):
+        print("▶ 로그아웃 감지 (ID 입력란 표시) → 확인창 처리 후 재로그인")
+    else:
+        print("▶ 로그인 세션 만료 → 확인창 처리 후 재로그인")
+
+    dismiss_logout_alerts(driver, rounds=3)
+
+    login(driver, login_id, login_pw, field_url=field_url)
+    sd = start_date or date_str
+    ed = end_date or date_str or start_date
+    if sd and ed:
+        search_date(driver, sd, ed)
+
+
+def open_detail_with_session_recovery(
+    driver,
+    sample_no: str,
+    login_id: str,
+    login_pw: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    date_str: str | None = None,
+    field_url: str = FIELD_URL,
+    max_recover: int = 5,
+    detail_wait_sel: str = "#machineDiv",
+) -> bool:
+    """상세 진입 실패 시 로그아웃이면 재로그인 후 같은 시료부터 재시도."""
+    recover_count = 0
+    while True:
+        if not ensure_logged_in_or_recover(
+            driver,
+            login_id,
+            login_pw,
+            start_date=start_date,
+            end_date=end_date,
+            date_str=date_str,
+            field_url=field_url,
+            max_recover=max_recover,
+        ):
+            return False
+
+        if open_sample_detail(driver, sample_no, detail_wait_sel=detail_wait_sel):
+            return True
+
+        if is_field_list_ready(driver):
+            return False
+
+        if recover_count >= max_recover:
+            print("❌ 세션 복구 반복 한도 초과 → 상세 진입 중단")
+            return False
+
+        recover_count += 1
+        print(f"▶ 상세 진입 실패 → 세션 복구 후 재시도 ({recover_count}/{max_recover})")
+        recover_site_session(
+            driver,
+            login_id,
+            login_pw,
+            start_date=start_date,
+            end_date=end_date,
+            date_str=date_str,
+            field_url=field_url,
+        )
 
 
 # ======================================================================

@@ -747,9 +747,7 @@ def process_daejang(daejang_path: str,
 
                     if thc_status == "":
                         c65_num = 1 if str(sh_thc["C65"].value).strip() == "1" else 0
-
-                        if c65_num == 0:
-                            thc_b66 = str(sh_thc["B66"].value or "").strip()
+                        thc_b66 = str(sh_thc["B66"].value or "").strip()
 
                         val_i64 = sh_thc["I64"].value
                         val_k64 = sh_thc["K64"].value

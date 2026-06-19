@@ -38,7 +38,11 @@ from excel_utils import find_sheet_by_candidates as _find_sheet_by_candidates_op
 from file_utils import find_best_matching_file as _find_best_file_util, is_fugitive_dust_file
 from measin_utils import (
     login, search_date, wait_grid_loaded, get_samples_current_page,
-    open_sample_detail, go_back_to_list, collect_samples_from_files,
+    go_back_to_list, collect_samples_from_files,
+    open_detail_with_session_recovery, recover_site_session, is_field_list_ready,
+    ensure_detail_page_for_tab1, reopen_sample_from_search,
+    ensure_logged_in_or_recover, is_logged_out,
+    MAX_SAMPLE_DETAIL_RETRY,
     LOGIN_URL, FIELD_URL, NAS_BASE, NAS_DIRS
 )
 from excel_utils import find_sheet_by_candidates, parse_measuring_record, autofit_columns
@@ -135,33 +139,29 @@ def download_pdf(driver, sample_no):
     print(f"   [PDF] 다운로드 시도: {sample_no}")
 
     target_path = os.path.join(PDF_DIR, f"{sample_no}.pdf")
+    pdf_btn_sel = "#fileArea > section > div > div.row.fr > input:nth-child(3)"
 
-    # 기존 타겟 파일 있으면 삭제(있어도 상관 없지만 깔끔하게)
     if os.path.isfile(target_path):
         try:
             os.remove(target_path)
-        except:
+        except Exception:
             pass
 
-    # ✅ 1) 클릭 직전 폴더 상태 스냅샷
     try:
         before = set(os.listdir(PDF_DIR))
     except Exception as e:
         print(f"   ❌ PDF_DIR 접근 실패: {e}")
         return ""
 
-    # ✅ 2) PDF 버튼 클릭
-    if not safe_click(driver, "#fileArea > section > div > div.row.fr > input:nth-child(3)"):
+    if not safe_click(driver, pdf_btn_sel):
         print("   ❌ PDF 버튼 클릭 실패")
         return ""
 
-    # ✅ 3) 새로 생긴 PDF만 대기해서 잡기
     new_pdf = _wait_new_pdf(PDF_DIR, before, timeout=60)
     if not new_pdf or not os.path.isfile(new_pdf):
         print("   ❌ PDF 다운로드 완료/파일 탐지 실패")
         return ""
 
-    # ✅ 4) 최종 파일명으로 rename (동일 디스크면 replace가 제일 안전)
     try:
         if os.path.abspath(new_pdf) != os.path.abspath(target_path):
             os.replace(new_pdf, target_path)
@@ -169,7 +169,6 @@ def download_pdf(driver, sample_no):
         return target_path
     except Exception as e:
         print(f"   ❌ PDF 이름 변경 실패: {e}")
-        # 이름 변경 실패해도 실제 받은 파일 경로라도 리턴
         return new_pdf
 
 
@@ -187,7 +186,7 @@ def gv(driver, selector):
         return ""
 
 
-def click_tab(driver, tab_id):
+def click_tab(driver, tab_id) -> bool:
     try:
         el = WebDriverWait(driver, 10).until(
             EC.element_to_be_clickable((By.CSS_SELECTOR, f"a#{tab_id}"))
@@ -197,14 +196,22 @@ def click_tab(driver, tab_id):
         driver.execute_script("arguments[0].click();", el)
 
         if tab_id == "ui-id-1":
-            wait_until_exists(driver, "#machineDiv", timeout=10)
+            WebDriverWait(driver, 10).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, "#machineDiv"))
+            )
         elif tab_id == "ui-id-2":
-            wait_until_exists(driver, "#meas_start_time", timeout=10)
+            WebDriverWait(driver, 10).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, "#meas_start_time"))
+            )
         elif tab_id == "ui-id-3":
-            wait_until_exists(driver, "td#officer_dt", timeout=10)
+            WebDriverWait(driver, 10).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, "td#officer_dt"))
+            )
         time.sleep(0.3)
-    except:
+        return True
+    except Exception:
         print(" ❌ 탭 전환 실패:", tab_id)
+        return False
 
 
 def get_wind_direction_text(driver):
@@ -348,26 +355,26 @@ def relax_env_input_time_by_company(sample_rows_map: dict, excel_meta_map: dict)
                 r["사이트만존재"] = ""
 
 
-def read_site_data(driver, sample_no):
-    data = {}
-
-    # ------------------------------------------------------------
-    # ① 탭1 데이터 수집 (장비 / 차량 / 인력 / 측정항목)
-    # ------------------------------------------------------------
-    click_tab(driver, "ui-id-1")
+def _collect_tab1_data(driver, data: dict):
+    if not click_tab(driver, "ui-id-1"):
+        return
     time.sleep(1.5)
     try:
-        els = driver.find_elements(By.CSS_SELECTOR,
-                                   "#machineDiv > div > span > span.selection > span > ul > li")
+        els = driver.find_elements(
+            By.CSS_SELECTOR,
+            "#machineDiv > div > span > span.selection > span > ul > li",
+        )
         data["장비"] = [clean_leading_mark(e.text) for e in els if e.text.strip()]
-    except:
+    except Exception:
         data["장비"] = []
 
     try:
-        els = driver.find_elements(By.CSS_SELECTOR,
-                                   "#carSection > div > span > span.selection > span > ul > li")
+        els = driver.find_elements(
+            By.CSS_SELECTOR,
+            "#carSection > div > span > span.selection > span > ul > li",
+        )
         data["차량"] = [clean_leading_mark(e.text) for e in els if e.text.strip()]
-    except:
+    except Exception:
         data["차량"] = []
 
     try:
@@ -375,60 +382,72 @@ def read_site_data(driver, sample_no):
             By.CSS_SELECTOR,
             "#wid-id-4 > div > div.widget-body.no-padding > div > fieldset "
             "> div.row.input-full > section:nth-child(2) "
-            "> span > span.selection > span > ul > li"
+            "> span > span.selection > span > ul > li",
         )
         data["인력"] = [clean_leading_mark(e.text) for e in els if e.text.strip()]
-    except:
+    except Exception:
         data["인력"] = []
 
     try:
-        els = driver.find_elements(By.CSS_SELECTOR,
-                                   "#inairTargetItem > div:nth-child(2) > div > span > span.selection > span > ul > li")
+        els = driver.find_elements(
+            By.CSS_SELECTOR,
+            "#inairTargetItem > div:nth-child(2) > div > span > span.selection > span > ul > li",
+        )
         arr = []
         for e in els:
             t = clean_leading_mark(e.text.strip())
             if t:
                 arr.append(t)
         data["측정항목"] = arr
-    except:
+    except Exception:
         data["측정항목"] = []
 
-    # ------------------------------------------------------------
-    # ①-2 탭1 측정목적 수집 (자가측정용/참고용 등)
-    # ------------------------------------------------------------
     try:
         sel_el = driver.find_element(By.ID, "edit_meas_purpose")
-        # selected 속성이 있는 option의 텍스트를 가져옴
         purpose_val = driver.execute_script(
-            "var sel = arguments[0]; return sel.options[sel.selectedIndex].text;", 
-            sel_el
+            "var sel = arguments[0]; return sel.options[sel.selectedIndex].text;",
+            sel_el,
         )
         data["측정목적"] = purpose_val.strip() if purpose_val else ""
-    except:
+    except Exception:
         data["측정목적"] = ""
 
-    # ------------------------------------------------------------
-    # ② 탭2 데이터 수집 (채취시간/기상/산소농도 등)
-    # ------------------------------------------------------------
-    click_tab(driver, "ui-id-2")
+
+def _collect_tab2_data(driver, data: dict):
+    if not click_tab(driver, "ui-id-2"):
+        return
     time.sleep(1)
     data["날짜"] = norm_ymd(gv(driver, SEL_DATE))
-    data["기상"] = gv(driver,
-        "#idWHArea > div > div:nth-child(2) > fieldset > label.col.col-12 > table > tbody > tr > td:nth-child(1) > input")
-    data["기온"] = gv(driver,
-        "#idWHArea > div > div:nth-child(2) > fieldset > label.col.col-12 > table > tbody > tr > td:nth-child(2) > input")
-    data["습도"] = gv(driver,
-        "#idWHArea > div > div:nth-child(2) > fieldset > label.col.col-12 > table > tbody > tr > td:nth-child(3) > input")
-    data["기압"] = gv(driver,
-        "#idWHArea > div > div:nth-child(2) > fieldset > label.col.col-12 > table > tbody > tr > td:nth-child(4) > input")
-
+    data["기상"] = gv(
+        driver,
+        "#idWHArea > div > div:nth-child(2) > fieldset > label.col.col-12 "
+        "> table > tbody > tr > td:nth-child(1) > input",
+    )
+    data["기온"] = gv(
+        driver,
+        "#idWHArea > div > div:nth-child(2) > fieldset > label.col.col-12 "
+        "> table > tbody > tr > td:nth-child(2) > input",
+    )
+    data["습도"] = gv(
+        driver,
+        "#idWHArea > div > div:nth-child(2) > fieldset > label.col.col-12 "
+        "> table > tbody > tr > td:nth-child(3) > input",
+    )
+    data["기압"] = gv(
+        driver,
+        "#idWHArea > div > div:nth-child(2) > fieldset > label.col.col-12 "
+        "> table > tbody > tr > td:nth-child(4) > input",
+    )
     data["풍향"] = get_wind_direction_text(driver)
-    data["풍속"] = to_float1(gv(driver,
-        "#idWHArea > div > div:nth-child(2) > fieldset > label.col.col-12 > table > tbody > tr > td:nth-child(6) > input"))
-
+    data["풍속"] = to_float1(
+        gv(
+            driver,
+            "#idWHArea > div > div:nth-child(2) > fieldset > label.col.col-12 "
+            "> table > tbody > tr > td:nth-child(6) > input",
+        )
+    )
     data["채취시작"] = trim_time_to_hm(gv(driver, SEL_START_TIME))
     data["채취끝"] = trim_time_to_hm(gv(driver, SEL_END_TIME))
-
     data["표준산소농도"] = to_float1(gv(driver, SEL_O2_STD))
     data["실측산소농도"] = to_float1(gv(driver, SEL_O2_MEAS))
     data["배출가스유량전"] = to_float1(gv(driver, SEL_GAS_VOL_PRE))
@@ -437,27 +456,40 @@ def read_site_data(driver, sample_no):
     data["배출가스온도"] = gv(driver, SEL_GAS_TEMP)
     data["배출가스유속"] = to_float2(gv(driver, SEL_GAS_SPEED))
 
-    # ------------------------------------------------------------
-    # ③ 탭2에서 PDF 다운로드 실행
-    # ------------------------------------------------------------
 
-    try:
-        data["PDF경로"] = download_pdf(driver, sample_no)
-    except Exception as e:
-        print("⚠ PDF 다운로드 실패:", e)
-        data["PDF경로"] = ""
-
-    # ------------------------------------------------------------
-    # ④ 탭3 데이터 수집 (모바일 입력/GPS/촬영일시)
-    # ------------------------------------------------------------
-    click_tab(driver, "ui-id-3")
+def _collect_tab3_data(driver, data: dict) -> bool:
+    if not click_tab(driver, "ui-id-3"):
+        return False
     time.sleep(2)
     mob = get_mobile_times(driver)
     data["환경기술인입력일시"] = mob["환경기술인입력일시"]
     data["GPS위치확인일시"] = mob["GPS위치확인일시"]
     data["촬영일시목록"] = mob["촬영일시목록"]
+    return True
 
-    return data
+
+def read_site_data(driver, sample_no):
+    """사이트 탭1~3 + PDF 수집. 반환: (data, ok, failures)"""
+    data = {}
+    failures = []
+
+    _collect_tab1_data(driver, data)
+    _collect_tab2_data(driver, data)
+
+    click_tab(driver, "ui-id-2")
+    time.sleep(0.5)
+    try:
+        data["PDF경로"] = download_pdf(driver, sample_no)
+    except Exception as e:
+        print("⚠ PDF 다운로드 실패:", e)
+        data["PDF경로"] = ""
+    if not data.get("PDF경로"):
+        failures.append("pdf")
+
+    if not _collect_tab3_data(driver, data):
+        failures.append("tab3")
+
+    return data, (len(failures) == 0), failures
 
 
 # ------------------------------------------------------------
@@ -1184,60 +1216,155 @@ def main(progress_callback=None, cancel_event=None):
                 print("\n[취소됨] 작업을 중단합니다.")
                 break
 
-            # 상세페이지 진입
-            if not open_sample_detail(driver, sample_no):
-                continue
-            if is_cancelled(cancel_event):
-                print("\n[취소됨] 작업을 중단합니다.")
-                break
-            time.sleep(1)
-            site = read_site_data(driver, sample_no)
-            PDF_MAP[sample_no] = site.get("PDF경로", "")
-            xlsx = find_excel_for_sample(sample_no)
-            if not xlsx:
-                go_back_to_list(driver)
-                continue
-            is_dust = is_fugitive_dust_file(str(xlsx))
-            excel = parse_measuring_record(str(xlsx), sample_no)
-            COMPANY_MAP[sample_no] = excel.get("업소명", "")
-            # --------------------------------------------------
-            # 시료별 메타 저장(날짜/업소/채취시간) - 환경기술인 입력일시 완화용
-            # --------------------------------------------------
-            excel_meta_map[sample_no] = {
-                "날짜": excel.get("날짜", ""),
-                "업소명": excel.get("업소명", ""),
-                "측정시작DT": excel.get("측정시작DT", ""),
-                "측정종료DT": excel.get("측정종료DT", ""),
-            }
+            sample_done = False
+            session_recover_count = 0
+            sample_attempt = 0
+            while not sample_done:
+                if is_cancelled(cancel_event):
+                    break
 
-            excel["is_dust"] = is_dust
-            site["is_dust"] = is_dust
-            # --------------------------------------------------
-            # 탭2 RealGrid(항목별 표)도 같이 비교: 수기 입력 오타 탐지용
-            # --------------------------------------------------
-            time.sleep(1)
+                sample_attempt += 1
+                if sample_attempt > MAX_SAMPLE_DETAIL_RETRY:
+                    print(f"❌ {sample_no} 재시도 한도 초과 → 다음 시료로")
+                    break
 
-            try:
-                site_rg = rg_api_read_data(driver, REALGRID_ROOT_CSS)
-            except Exception as e:
-                site_rg = {}
-                # RealGrid를 못 읽어도 전체 비교는 진행
-                print("⚠ 탭2 RealGrid 읽기 실패:", e)
+                if not ensure_logged_in_or_recover(
+                    driver,
+                    login_id,
+                    login_pw,
+                    start_date=start_date,
+                    end_date=end_date,
+                ):
+                    print(f"❌ 로그인 복구 실패 → 다음 시료로 ({sample_no})")
+                    break
 
-            try:
-                excel_rg = build_excel_realgird_expected(str(xlsx), sample_no, is_dust=is_dust)
-            except Exception as e:
-                excel_rg = {}
-                print("⚠ 엑셀 RealGrid 기대값 생성 실패:", e)
+                if sample_attempt == 1:
+                    opened = open_detail_with_session_recovery(
+                        driver,
+                        sample_no,
+                        login_id,
+                        login_pw,
+                        start_date=start_date,
+                        end_date=end_date,
+                    )
+                else:
+                    opened = reopen_sample_from_search(
+                        driver,
+                        sample_no,
+                        login_id=login_id,
+                        login_pw=login_pw,
+                        start_date=start_date,
+                        end_date=end_date,
+                    )
 
-            site["realgrid"] = site_rg
-            excel["realgrid"] = excel_rg
+                if not opened:
+                    if sample_attempt < MAX_SAMPLE_DETAIL_RETRY:
+                        continue
+                    print(f"❌ 상세페이지 실패 → 다음 시료로 ({sample_no})")
+                    break
 
-            rows = build_comparison_rows(sample_no, site, excel)
-            sample_rows[sample_no] = rows
-            relax_env_input_time_by_company(sample_rows, excel_meta_map)
-            print(" 완료 : ", sample_no)
-            go_back_to_list(driver)
+                if not ensure_detail_page_for_tab1(driver):
+                    if sample_attempt < MAX_SAMPLE_DETAIL_RETRY:
+                        go_back_to_list(driver)
+                        continue
+                    print(f"❌ 상세 페이지 확인 실패 → 다음 시료로 ({sample_no})")
+                    break
+
+                if is_cancelled(cancel_event):
+                    break
+
+                try:
+                    time.sleep(1)
+                    site, read_ok, read_failures = read_site_data(driver, sample_no)
+                    if not read_ok:
+                        if sample_attempt < MAX_SAMPLE_DETAIL_RETRY:
+                            go_back_to_list(driver)
+                            continue
+
+                    PDF_MAP[sample_no] = site.get("PDF경로", "")
+                    xlsx = find_excel_for_sample(sample_no)
+                    if not xlsx:
+                        go_back_to_list(driver)
+                        sample_done = True
+                        continue
+                    is_dust = is_fugitive_dust_file(str(xlsx))
+                    excel = parse_measuring_record(str(xlsx), sample_no)
+                    COMPANY_MAP[sample_no] = excel.get("업소명", "")
+                    # --------------------------------------------------
+                    # 시료별 메타 저장(날짜/업소/채취시간) - 환경기술인 입력일시 완화용
+                    # --------------------------------------------------
+                    excel_meta_map[sample_no] = {
+                        "날짜": excel.get("날짜", ""),
+                        "업소명": excel.get("업소명", ""),
+                        "측정시작DT": excel.get("측정시작DT", ""),
+                        "측정종료DT": excel.get("측정종료DT", ""),
+                    }
+
+                    excel["is_dust"] = is_dust
+                    site["is_dust"] = is_dust
+                    # --------------------------------------------------
+                    # 탭2 RealGrid(항목별 표)도 같이 비교: 수기 입력 오타 탐지용
+                    # --------------------------------------------------
+                    time.sleep(1)
+
+                    try:
+                        site_rg = rg_api_read_data(driver, REALGRID_ROOT_CSS)
+                    except Exception as e:
+                        site_rg = {}
+                        # RealGrid를 못 읽어도 전체 비교는 진행
+                        print("⚠ 탭2 RealGrid 읽기 실패:", e)
+
+                    try:
+                        excel_rg = build_excel_realgird_expected(str(xlsx), sample_no, is_dust=is_dust)
+                    except Exception as e:
+                        excel_rg = {}
+                        print("⚠ 엑셀 RealGrid 기대값 생성 실패:", e)
+
+                    site["realgrid"] = site_rg
+                    excel["realgrid"] = excel_rg
+
+                    rows = build_comparison_rows(sample_no, site, excel)
+                    sample_rows[sample_no] = rows
+                    relax_env_input_time_by_company(sample_rows, excel_meta_map)
+                    if read_ok:
+                        print(" 완료 : ", sample_no)
+                    else:
+                        print(
+                            f" ⚠ 부분 완료 : {sample_no} "
+                            f"(미수집: {', '.join(read_failures)})"
+                        )
+                    go_back_to_list(driver)
+                    sample_done = True
+                except Exception as e:
+                    if is_logged_out(driver) and session_recover_count < 5:
+                        session_recover_count += 1
+                        print(
+                            f"▶ 로그아웃 감지 → 재로그인 후 {sample_no} 재시도 "
+                            f"({session_recover_count}/5)"
+                        )
+                        recover_site_session(
+                            driver,
+                            login_id,
+                            login_pw,
+                            start_date=start_date,
+                            end_date=end_date,
+                        )
+                        sample_attempt -= 1
+                        continue
+
+                    print(f"❌ 시료 처리 실패 ({sample_no}): {e}")
+                    if sample_attempt < MAX_SAMPLE_DETAIL_RETRY:
+                        try:
+                            go_back_to_list(driver)
+                        except Exception:
+                            pass
+                        continue
+
+                    try:
+                        go_back_to_list(driver)
+                    except Exception:
+                        pass
+                    break
 
         if sample_rows and not is_cancelled(cancel_event):
             # teams가 여러 개인 경우 → 팀별로 파일을 따로 저장 (dash에서 여러 파일 선택해서 종합검토)
