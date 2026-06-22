@@ -159,6 +159,52 @@ def create_labeled_entry(parent, label_text, row, column=0, width=20, show=None,
     return entry
 
 
+def bind_text_mousewheel(text_widget, *widgets):
+    """Text 위젯에 마우스 휠 스크롤 연결 (Windows)."""
+    def _on_mousewheel(event):
+        text_widget.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        return "break"
+
+    targets = widgets or (text_widget,)
+    for w in targets:
+        w.bind("<MouseWheel>", _on_mousewheel)
+
+
+def create_scrollable_text(parent, *, width=40, height=3, **text_kwargs):
+    """
+    여러 줄 입력용 Text + 세로 스크롤바.
+
+    Returns:
+        (frame, text_widget)
+    """
+    from tkinter import ttk
+
+    frame = ttk.Frame(parent)
+    frame.grid_columnconfigure(0, weight=1)
+    frame.grid_rowconfigure(0, weight=1)
+
+    opts = dict(
+        width=width,
+        height=height,
+        relief="flat",
+        highlightthickness=1,
+        highlightbackground="black",
+        highlightcolor="black",
+        wrap="none",
+    )
+    opts.update(text_kwargs)
+
+    scrollbar = ttk.Scrollbar(frame, orient="vertical")
+    text = tk.Text(frame, yscrollcommand=scrollbar.set, **opts)
+    scrollbar.config(command=text.yview)
+
+    text.grid(row=0, column=0, sticky="nsew")
+    scrollbar.grid(row=0, column=1, sticky="ns")
+    bind_text_mousewheel(text, frame)
+
+    return frame, text
+
+
 def set_state_recursive(container, state: str):
     """
     컨테이너 안의 모든 위젯의 상태를 재귀적으로 변경

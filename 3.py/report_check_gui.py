@@ -53,7 +53,7 @@ except Exception:
 # ------------------------------
 IMPORT_ERR = None
 try:
-    from gui_common import LogPanel
+    from gui_common import LogPanel, create_scrollable_text
     from data_utils import extract_sample_from_name as common_extract_sample_from_name
     import report_check
     try:
@@ -175,12 +175,8 @@ class ReportCheckFileListGUI:
             foreground="gray",
         ).grid(row=0, column=0, columnspan=2, sticky="w")
 
-        self.txt_samples = tk.Text(
-            mid, width=28, height=6,
-            relief="flat", highlightthickness=1,
-            highlightbackground="black", highlightcolor="black",
-        )
-        self.txt_samples.grid(row=1, column=0, sticky="nsew", pady=3)
+        text_frame, self.txt_samples = create_scrollable_text(mid, width=28, height=3)
+        text_frame.grid(row=1, column=0, sticky="nsew", pady=3)
 
         file_btns = ttk.Frame(mid)
         file_btns.grid(row=1, column=1, sticky="ns", padx=(8, 0))
