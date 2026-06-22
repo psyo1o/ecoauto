@@ -45,7 +45,7 @@ except Exception:
 # eco_input은 pythoncom/win32com을 즉시 로드하므로
 # 모듈 레벨에서 import하면 tkdnd DLL과 충돌함 → lazy import
 # ------------------------------
-from gui_common import LogPanel, set_state_recursive
+from gui_common import LogPanel, set_state_recursive, create_scrollable_text
 from data_utils import extract_sample_from_name as common_extract_sample_from_name, parse_ymd_date
 from config import REPORT_BASE, WATER_REPORT_INPUT
 import sys
@@ -269,10 +269,9 @@ class EcoInputGUI:
                   foreground="gray")
         self.lbl_hint_air.grid(row=0, column=0, columnspan=2, sticky="w")
 
-        self.txt_samples_air = tk.Text(self.air_direct_frame, width=40, height=3,
-                                          relief="flat", highlightthickness=1,
-                                          highlightbackground="black", highlightcolor="black")
-        self.txt_samples_air.grid(row=1, column=0, sticky="nsew", pady=3)
+        air_text_frame, self.txt_samples_air = create_scrollable_text(
+            self.air_direct_frame, width=40, height=3)
+        air_text_frame.grid(row=1, column=0, sticky="nsew", pady=3)
 
         # 파일 추가/삭제/비우기 버튼 (오른쪽)
         air_btns = ttk.Frame(self.air_direct_frame)
@@ -307,10 +306,9 @@ class EcoInputGUI:
                   foreground="gray")
         self.lbl_hint_water.grid(row=0, column=0, columnspan=2, sticky="w")
 
-        self.txt_samples_water = tk.Text(self.water_frame, width=40, height=3,
-                                            relief="flat", highlightthickness=1,
-                                            highlightbackground="black", highlightcolor="black")
-        self.txt_samples_water.grid(row=1, column=0, sticky="nsew", pady=3)
+        water_text_frame, self.txt_samples_water = create_scrollable_text(
+            self.water_frame, width=40, height=3)
+        water_text_frame.grid(row=1, column=0, sticky="nsew", pady=3)
 
         # 파일 추가/삭제/비우기 버튼 (오른쪽)
         water_btns = ttk.Frame(self.water_frame)

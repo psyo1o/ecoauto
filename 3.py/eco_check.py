@@ -1050,7 +1050,8 @@ def save_results(sample_rows_map, out_path):
     ws_sum = wb.active
     ws_sum.title = "요약"
     ws_sum.append(["시료번호", "업소명", "항목", "비교", "사이트값", "엑셀값", "사이트만존재", "엑셀만존재"])
-
+    # 요약 시트 1행 1열 틀고정 (B2 셀 기준)
+    ws_sum.freeze_panes = "B2"
 
     for sample_no, rows in sample_rows_map.items():
         ws = wb.create_sheet(sample_no)
