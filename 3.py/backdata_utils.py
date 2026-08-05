@@ -180,15 +180,8 @@ def _should_skip_until_end(sample_no: str, item_name: str, end_time_value) -> bo
 # =====================================================================
 # 수분 CSV(표시값 그대로)
 # =====================================================================
-def _export_moist_csv_from_open_ws(excel_app, ws, out_csv_path: str, max_rows=None):
-    """
-    ✅ '열린 ws(엑셀 COM)'에서 표시값을 복사해서 CSV로 저장
-    - 날짜/시간/소수점 등 표시 서식 유지
-    - 탭 → 콤마
-    """
-    os.makedirs(os.path.dirname(out_csv_path), exist_ok=True)
-
-    # 마지막 행/열(값 기준, 빠름)
+def _moist_csv_text_from_open_ws(excel_app, ws, max_rows=None) -> str:
+    """열린 ws에서 표시값을 복사해 CSV 텍스트로 반환 (탭→콤마, CRLF)."""
     last_row = ws.Cells(ws.Rows.Count, 1).End(XL_UP).Row
     last_col = ws.Cells(1, ws.Columns.Count).End(XL_TOLEFT).Column
 
@@ -205,15 +198,21 @@ def _export_moist_csv_from_open_ws(excel_app, ws, out_csv_path: str, max_rows=No
 
     if not txt or not txt.strip():
         raise RuntimeError("클립보드에서 수분 데이터를 복사해오지 못했습니다. (엑셀 응답 없음)")
-        
-    # 탭 → 콤마
+
     txt = txt.replace("\t", ",")
-    # 줄바꿈 정리(윈도우 CRLF 유지)
     txt = txt.replace("\r\n", "\n").replace("\r", "\n")
-    txt = "\r\n".join(txt.split("\n"))
+    return "\r\n".join(txt.split("\n"))
 
+
+def _export_moist_csv_from_open_ws(excel_app, ws, out_csv_path: str, max_rows=None):
+    """
+    ✅ '열린 ws(엑셀 COM)'에서 표시값을 복사해서 CSV로 저장
+    - 날짜/시간/소수점 등 표시 서식 유지
+    - 탭 → 콤마
+    """
+    os.makedirs(os.path.dirname(out_csv_path), exist_ok=True)
+    txt = _moist_csv_text_from_open_ws(excel_app, ws, max_rows=max_rows)
     _safe_write_file(out_csv_path, txt, encoding="utf-8-sig", newline="")
-
     return out_csv_path
 
 
@@ -243,12 +242,8 @@ def export_csv_display_as_is(excel_path: str, sheet_name: str, out_csv_path: str
 # =====================================================================
 # THC PF → FID(150행 고정, 복사 기반)
 # =====================================================================
-def _export_pf_fid_from_open_ws(excel_app, ws, out_fid_path: str, fixed_rows=150):
-    """
-    ✅ 열린 ws(엑셀 COM)에서 150행 고정으로 복사한 텍스트를 .FID로 저장
-    """
-    os.makedirs(os.path.dirname(out_fid_path), exist_ok=True)
-
+def _pf_fid_text_from_open_ws(excel_app, ws, fixed_rows=150) -> str:
+    """열린 ws에서 150행 고정 복사한 FID 텍스트 반환."""
     last_col = ws.UsedRange.Columns.Count
     if not last_col or last_col < 1:
         last_col = 1
@@ -258,10 +253,16 @@ def _export_pf_fid_from_open_ws(excel_app, ws, out_fid_path: str, fixed_rows=150
 
     if not txt or not txt.strip():
         raise RuntimeError("클립보드에서 THC(PF) 데이터를 복사해오지 못했습니다.")
+    return txt
 
-    # 안전 저장 유틸 사용
+
+def _export_pf_fid_from_open_ws(excel_app, ws, out_fid_path: str, fixed_rows=150):
+    """
+    ✅ 열린 ws(엑셀 COM)에서 150행 고정으로 복사한 텍스트를 .FID로 저장
+    """
+    os.makedirs(os.path.dirname(out_fid_path), exist_ok=True)
+    txt = _pf_fid_text_from_open_ws(excel_app, ws, fixed_rows=fixed_rows)
     _safe_write_file(out_fid_path, txt, encoding="utf-8-sig", newline="")
-
     return out_fid_path
 
 
@@ -312,9 +313,9 @@ def _used_range_bounds(ws):
     return max_row, max_col
 
 
-def _export_ws_to_csv(ws, out_csv_path, encoding="utf-8-sig"):
+def _ws_to_csv_text(ws) -> str:
+    """openpyxl 시트를 생성 로직과 동일한 CSV 텍스트로 변환."""
     last_r, last_c = _used_range_bounds(ws)
-    os.makedirs(os.path.dirname(out_csv_path), exist_ok=True)
 
     def q(s):
         s = _safe_str(s)
@@ -333,7 +334,12 @@ def _export_ws_to_csv(ws, out_csv_path, encoding="utf-8-sig"):
     while lines and lines[-1].strip() == "":
         lines.pop()
 
-    text_data = "\n".join(lines)
+    return "\n".join(lines)
+
+
+def _export_ws_to_csv(ws, out_csv_path, encoding="utf-8-sig"):
+    os.makedirs(os.path.dirname(out_csv_path), exist_ok=True)
+    text_data = _ws_to_csv_text(ws)
     _safe_write_file(out_csv_path, text_data, encoding=encoding, newline="\n")
 
 
@@ -512,3 +518,138 @@ def export_backdata_moist_thc(excel_path: str, sample_no: str):
                 wb_xl.Close(False)
         except:
             pass
+
+
+# =====================================================================
+# 성적서 ↔ 백데이터 정합 비교
+# =====================================================================
+def _normalize_backdata_text(text: str) -> str:
+    """개행 통일 + 행 끝 공백/끝 빈 줄만 정리 (값은 그대로)."""
+    s = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [line.rstrip() for line in s.split("\n")]
+    while lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines)
+
+
+def _read_backdata_text(path: str) -> str:
+    data = open(path, "rb").read()
+    for enc in ("utf-8-sig", "cp949", "euc-kr", "utf-16", "latin1"):
+        try:
+            return data.decode(enc)
+        except Exception:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+def _find_sheet_name(names, preferred: str):
+    if preferred in names:
+        return preferred
+    pref_key = preferred.replace(" ", "")
+    for n in names:
+        if str(n).replace(" ", "") == pref_key:
+            return n
+    return None
+
+
+def _extract_expected_backdata_text(excel_path: str, kind: str) -> str:
+    """
+    백데이터 생성과 동일한 규칙으로 성적서에서 기대 텍스트를 뽑는다.
+    kind: moisture | thc_csv | thc_fid
+    """
+    if kind == "moisture":
+        excel = get_excel_app()
+        wb_xl = None
+        try:
+            wb_xl = excel.Workbooks.Open(excel_path, ReadOnly=True, UpdateLinks=0)
+            try:
+                ws = wb_xl.Worksheets("수분량자동측정")
+            except Exception:
+                ws = None
+                for sh in wb_xl.Worksheets:
+                    if str(sh.Name).replace(" ", "") == "수분량자동측정":
+                        ws = sh
+                        break
+                if ws is None:
+                    raise RuntimeError("시트 없음: 수분량자동측정")
+            return _moist_csv_text_from_open_ws(excel, ws, max_rows=6)
+        finally:
+            try:
+                if wb_xl is not None:
+                    try:
+                        excel.CutCopyMode = False
+                    except Exception:
+                        pass
+                    wb_xl.Close(False)
+            except Exception:
+                pass
+
+    if kind == "thc_csv":
+        wb = load_workbook(excel_path, data_only=True)
+        try:
+            sheet_name = _find_sheet_name(wb.sheetnames, "THC 측정값(FID)")
+            if sheet_name is None:
+                raise RuntimeError("시트 없음: THC 측정값(FID)")
+            return _ws_to_csv_text(wb[sheet_name])
+        finally:
+            try:
+                wb.close()
+            except Exception:
+                pass
+
+    if kind == "thc_fid":
+        excel = get_excel_app()
+        wb_xl = None
+        try:
+            wb_xl = excel.Workbooks.Open(excel_path, ReadOnly=True, UpdateLinks=0)
+            sheet_name = "THC 측정값(PF)"
+            try:
+                ws = wb_xl.Worksheets(sheet_name)
+            except Exception:
+                ws = None
+                for sh in wb_xl.Worksheets:
+                    if str(sh.Name).replace(" ", "") == sheet_name.replace(" ", ""):
+                        ws = sh
+                        break
+                if ws is None:
+                    raise RuntimeError("시트 없음: THC 측정값(PF)")
+            return _pf_fid_text_from_open_ws(excel, ws, fixed_rows=150)
+        finally:
+            try:
+                if wb_xl is not None:
+                    try:
+                        excel.CutCopyMode = False
+                    except Exception:
+                        pass
+                    wb_xl.Close(False)
+            except Exception:
+                pass
+
+    raise ValueError(f"지원하지 않는 kind: {kind}")
+
+
+def compare_backdata_with_report(
+    excel_path: str,
+    sample_no: str,
+    backdata_path: str,
+    kind: str,
+) -> tuple[bool, str]:
+    """
+    성적서에서 기대 백데이터를 재추출해 기존 백데이터 파일과 비교.
+    kind: moisture | thc_csv | thc_fid
+    반환: (ok, reason) — 실패 시 reason은 '내용불일치' 또는 '내용읽기오류'
+    """
+    _ = sample_no  # API 호환/로그용 (비교 자체에는 경로·kind만 사용)
+    try:
+        if not excel_path or not os.path.exists(excel_path):
+            return False, "내용읽기오류"
+        if not backdata_path or not os.path.exists(backdata_path):
+            return False, "내용읽기오류"
+
+        expected = _extract_expected_backdata_text(excel_path, kind)
+        actual = _read_backdata_text(backdata_path)
+        if _normalize_backdata_text(expected) == _normalize_backdata_text(actual):
+            return True, ""
+        return False, "내용불일치"
+    except Exception:
+        return False, "내용읽기오류"

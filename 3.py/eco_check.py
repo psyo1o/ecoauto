@@ -355,6 +355,60 @@ def relax_env_input_time_by_company(sample_rows_map: dict, excel_meta_map: dict)
                 r["사이트만존재"] = ""
 
 
+def relax_env_input_time_by_env_psic(sample_rows_map: dict, excel_meta_map: dict):
+    """
+    동일 날짜 + 동일 환경기술인(탭3 field_officer_name) 케이스에서
+    환경기술인 입력일시가 '해당 시료' 채취시간을 벗어나도
+    같은 환경기술인의 다른 시료 채취시간 범위 안이면 OK로 완화한다.
+    """
+    from collections import defaultdict
+
+    windows = defaultdict(list)  # (date, psic_name) -> [(start_dt, end_dt), ...]
+
+    for sn, meta in (excel_meta_map or {}).items():
+        if not isinstance(meta, dict):
+            continue
+        date = (meta.get("날짜") or "").strip()
+        psic = (meta.get("환경기술인") or "").strip()
+        st = _pd(meta.get("측정시작DT", ""))
+        ed = _pd(meta.get("측정종료DT", ""))
+        if date and psic and st and ed:
+            windows[(date, psic)].append((st, ed))
+
+    if not windows:
+        return
+
+    for sn, rows in (sample_rows_map or {}).items():
+        meta = (excel_meta_map or {}).get(sn, {})
+        if not isinstance(meta, dict):
+            continue
+
+        date = (meta.get("날짜") or "").strip()
+        psic = (meta.get("환경기술인") or "").strip()
+        if not date or not psic:
+            continue
+
+        key = (date, psic)
+        if key not in windows:
+            continue
+
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            if r.get("항목") != "환경기술인입력일시":
+                continue
+            if r.get("비교") != "NG":
+                continue
+
+            dt = _pd(r.get("사이트값", ""))
+            if not dt:
+                continue
+
+            if any(st <= dt <= ed for st, ed in windows[key]):
+                r["비교"] = "OK"
+                r["사이트만존재"] = ""
+
+
 def _collect_tab1_data(driver, data: dict):
     if not click_tab(driver, "ui-id-1"):
         return
@@ -465,6 +519,10 @@ def _collect_tab3_data(driver, data: dict) -> bool:
     data["환경기술인입력일시"] = mob["환경기술인입력일시"]
     data["GPS위치확인일시"] = mob["GPS위치확인일시"]
     data["촬영일시목록"] = mob["촬영일시목록"]
+    try:
+        data["환경기술인"] = gv(driver, "#field_officer_name")
+    except Exception:
+        data["환경기술인"] = ""
     return True
 
 
@@ -1008,6 +1066,15 @@ def build_comparison_rows(sample_no, site, excel):
     es = excel.get("측정시작DT", "")
     ee = excel.get("측정종료DT", "")
 
+    rows.append({
+        "sample": sample_no,
+        "항목": "환경기술인",
+        "사이트값": site.get("환경기술인", ""),
+        "엑셀값": "",
+        "비교": "",
+        "사이트만존재": "",
+        "엑셀만존재": "",
+    })
     rows.append(compare_mobile_single(sample_no, "환경기술인입력일시",
                                       site.get("환경기술인입력일시", ""), es, ee))
     rows.append(compare_mobile_single(sample_no, "GPS위치확인일시",
@@ -1299,6 +1366,7 @@ def main(progress_callback=None, cancel_event=None):
                         "업소명": excel.get("업소명", ""),
                         "측정시작DT": excel.get("측정시작DT", ""),
                         "측정종료DT": excel.get("측정종료DT", ""),
+                        "환경기술인": site.get("환경기술인", ""),
                     }
 
                     excel["is_dust"] = is_dust
@@ -1327,6 +1395,7 @@ def main(progress_callback=None, cancel_event=None):
                     rows = build_comparison_rows(sample_no, site, excel)
                     sample_rows[sample_no] = rows
                     relax_env_input_time_by_company(sample_rows, excel_meta_map)
+                    relax_env_input_time_by_env_psic(sample_rows, excel_meta_map)
                     if read_ok:
                         print(" 완료 : ", sample_no)
                     else:
@@ -1401,7 +1470,9 @@ def main(progress_callback=None, cancel_event=None):
 
 if __name__ == "__main__":
     try:
-        main()
+        from log_utils import run_log
+        with run_log("eco_check"):
+            main()
     except Exception as e:
         log_error("eco_check.main", e)
         raise

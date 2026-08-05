@@ -674,6 +674,7 @@ class EcoInputGUI:
             "do_tab2": do_tab2,
             "do_tab4": do_tab4,
             "do_pdf_final": do_pdf,
+            # 수질: 그룹웨어 연동 미적용
             "raw_samples": raw,
         }
 
@@ -749,8 +750,12 @@ class EcoInputGUI:
         self.progress_bar.start(10)
 
         def worker():
+            run_session = None
             try:
                 import eco_input as _eco  # lazy import
+                from log_utils import start_run_log, stop_run_log
+
+                run_session = start_run_log("eco_input")
                 log_writer = sys.stdout
 
                 class ProgressMonitor:
@@ -773,6 +778,7 @@ class EcoInputGUI:
 
                 sys.stdout = ProgressMonitor(log_writer, self.root, self.start_btn)
 
+                failed_gw: list = []
                 try:
                     if answers.get("media") == "2":
                         _eco._main_water(
@@ -782,10 +788,11 @@ class EcoInputGUI:
                             do_tab2=answers["do_tab2"],
                             do_tab4=answers["do_tab4"],
                             do_pdf_final=answers["do_pdf_final"],
+                            do_groupware=answers.get("do_groupware"),
                             raw_samples=answers["raw_samples"],
                         )
                     else:
-                        _eco._main_air(
+                        result = _eco._main_air(
                             cancel_event=self.cancel_event,
                             job=answers["job"],
                             login_id=answers.get("login_id", ""),
@@ -797,12 +804,18 @@ class EcoInputGUI:
                             do_backdata=answers["do_backdata"],
                             do_tab4=answers["do_tab4"],
                             do_pdf_final=answers["do_pdf_final"],
+                            do_groupware=answers.get("do_groupware"),
                             raw_samples=answers.get("raw_samples"),
                             team_no=answers.get("team_no", ""),
                             date_str=answers.get("date_str", ""),
                         )
+                        failed_gw = result or []
                 finally:
                     sys.stdout = log_writer
+
+                # 그룹웨어 전송 실패 건이 있으면 GUI 다이얼로그로 재시도 여부 확인
+                if failed_gw:
+                    self.root.after(0, lambda f=failed_gw: self._ask_groupware_retry(f))
 
             except Exception as e:
                 import traceback
@@ -813,6 +826,11 @@ class EcoInputGUI:
                     lambda m=err_msg: messagebox.showerror("오류", m, parent=self.root),
                 )
             finally:
+                try:
+                    from log_utils import stop_run_log
+                    stop_run_log(run_session)
+                except Exception:
+                    pass
                 self.root.after(0, lambda: (
                     self.start_btn.config(state="normal", text="자동 입력 시작"),
                     self.cancel_btn.config(state="disabled"),
@@ -820,6 +838,77 @@ class EcoInputGUI:
                 ))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _ask_groupware_retry(self, failed: list):
+        """그룹웨어 전송 실패 목록을 보여주고 재시도 여부 확인."""
+        import threading
+        lines = [f"그룹웨어 전송 실패 {len(failed)}건:"]
+        for f in failed:
+            d = "데이터❌" if not f["data_ok"] else "데이터✅"
+            p = "" if not f["pdf_attempted"] else (" PDF❌" if not f["pdf_ok"] else " PDF✅")
+            err = f"\n    ({f['error'][:80]})" if f["error"] else ""
+            lines.append(f"  • {f['sample_no']}  {d}{p}{err}")
+        lines.append("\n지금 재전송할까요?")
+        msg = "\n".join(lines)
+
+        ans = messagebox.askyesno("그룹웨어 전송 실패", msg, parent=self.root)
+        if not ans:
+            return
+
+        def _retry():
+            print(f"\n▶ 그룹웨어 재전송 시작 ({len(failed)}건)...", flush=True)
+            import os
+            import time as _time
+            from groupware_client import build_payload_air, sync_to_groupware
+            still_failed = []
+            for f in failed:
+                payload = f.get("payload") or {}
+                excel = (payload.get("source_excel") or "").strip()
+                if excel and os.path.isfile(excel):
+                    try:
+                        payload = build_payload_air(f["sample_no"], excel)
+                    except Exception as e:
+                        print(f"  ⚠ {f['sample_no']}: payload 재조립 실패 — {e}", flush=True)
+                if not payload:
+                    print(f"  ⚠ {f['sample_no']}: payload 없음 — 스킵")
+                    still_failed.append(f)
+                    continue
+                print(
+                    f"  → {f['sample_no']} 재전송 중... "
+                    f"collected_at={payload.get('collected_at')!r}",
+                    flush=True,
+                )
+                result = sync_to_groupware(payload, pdf_path=None)
+                warns = result.get("warnings") or []
+                if result.get("data_ok") and not warns:
+                    print(
+                        f"  ✅ {f['sample_no']}: 재전송 성공 "
+                        f"verify_key={result.get('verify_key','')}",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"  ❌ {f['sample_no']}: 재전송 실패/경고 — "
+                        f"{result.get('error','')} {warns}",
+                        flush=True,
+                    )
+                    still_failed.append(f)
+                _time.sleep(2)
+
+            if still_failed:
+                self.root.after(0, lambda sf=still_failed: messagebox.showwarning(
+                    "재전송 실패",
+                    f"재전송 후에도 {len(sf)}건 실패:\n" +
+                    "\n".join(f"  • {x['sample_no']}" for x in sf) +
+                    "\n\n로그 엑셀(6.그룹웨어전송\\연도년\\월 폴더)을 확인하세요.",
+                    parent=self.root,
+                ))
+            else:
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "재전송 완료", "모든 건 재전송 성공.", parent=self.root
+                ))
+
+        threading.Thread(target=_retry, daemon=True).start()
 
     @staticmethod
     def _yn(val) -> str:

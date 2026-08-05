@@ -647,8 +647,9 @@ def read_analysis_items(ws_analysis):
     if ws_analysis is None:
         return []
 
-    # ✅ 1행 헤더에서 시료채취량 열 위치 찾기 (Sm³/L 단위 무관)
+    # ✅ 1행 헤더에서 시료채취량·시료채취시간 열 위치 찾기 (Sm³/L 단위 무관)
     vol_col = find_analysis_header_col(ws_analysis, ["시료채취량", "시료 채취량"])
+    collect_time_col = find_analysis_header_col(ws_analysis, ["시료채취시간", "시료 채취시간"])
 
     rows = []
     for r in range(2, 65):
@@ -673,6 +674,9 @@ def read_analysis_items(ws_analysis):
         st_raw = ws_analysis.Cells(r, 9).Value  # I
         ed_raw = ws_analysis.Cells(r, 11).Value # K
         vol_raw = ws_analysis.Cells(r, vol_col).Value if vol_col else None
+        collect_time_raw = (
+            ws_analysis.Cells(r, collect_time_col).Value if collect_time_col else None
+        )
 
         rows.append({
             "src": "입력(분석값)",
@@ -687,6 +691,7 @@ def read_analysis_items(ws_analysis):
             "c_val": to_float_if_pure_number(c_val),
             "d_val": to_float_if_pure_number(d_val),
             "vol": to_float_if_pure_number(vol_raw),
+            "collect_time": to_float_if_pure_number(collect_time_raw),
         })
     return rows
 
@@ -694,10 +699,11 @@ def read_analysis_items(ws_analysis):
 # ✅ 입자상 채취기준 검사
 #   - 먼지       : 채취시간 ≥ 40분  OR  시료채취량 ≥ 0.4  OR  무게(C-D) ≥ 0.005  → 정상
 #   - 중금속(8종): 시료채취량 ≥ 1                                                → 정상
-#   - 벤조(a)피렌: 시료채취량 ≥ 3                                                → 정상
+#   - 벤조(a)피렌: (1) 시료채취량 ≥ 3  OR  시료채취시간(분) ≥ 240
+#                 (2) 입력!B6=원형 이고 B7>4.5 이면 시료채취시간 ≥ 250 (별도 조건)
 #   위 기준에 안맞으면 [채취기준미달] 으로 보고
 # ============================================================
-def check_particle_sampling_criteria(rows):
+def check_particle_sampling_criteria(rows, input_b6=None, input_b7=None):
     issues = []
 
     def _fmt_num(v, digits=4):
@@ -764,11 +770,32 @@ def check_particle_sampling_criteria(rows):
 
         # ── 벤조(a)피렌 ────────────────────────────────────
         elif gid == "PM-BaP" or (("벤조" in item) and ("피렌" in item)):
-            if vol is None or vol < 3:
+            collect_time = d.get("collect_time")
+            t_str = (
+                f"{collect_time:.0f}분"
+                if collect_time is not None
+                else "(없음)"
+            )
+
+            # (1) 시료채취량 ≥ 3  OR  시료채취시간 ≥ 240분
+            ok_vol = (vol is not None and vol >= 3)
+            ok_time_240 = (collect_time is not None and collect_time >= 240)
+            if not (ok_vol or ok_time_240):
                 v_str = _fmt_num(vol)
                 issues.append(
-                    f"[채취기준미달] 벤조(a)피렌: 시료채취량={v_str} (≥3 필요)"
+                    f"[채취기준미달] 벤조(a)피렌: 시료채취량={v_str}(≥3), "
+                    f"시료채취시간={t_str}(≥240분) → 둘 중 하나도 충족 못함"
                 )
+
+            # (2) 입력!B6=원형, B7>4.5 → 시료채취시간 ≥ 250분 (별도 조건)
+            b6 = str(input_b6 or "").strip()
+            b7 = input_b7
+            if b6 == "원형" and b7 is not None and b7 > 4.5:
+                if collect_time is None or collect_time < 250:
+                    issues.append(
+                        f"[채취기준미달] 벤조(a)피렌(원형·B7>4.5): "
+                        f"시료채취시간={t_str} (≥250분 필요, 입력!B6=원형·B7={_fmt_num(b7)})"
+                    )
 
     return issues
 
@@ -1541,7 +1568,19 @@ def main(sample_list, user_name, cancel_event=None):
                     time_issues += check_particle_vs_prereq_events(particle_events, prereq_events)
 
                     # ✅ 입자상 채취기준 검사 (먼지 / 중금속 / 벤조(a)피렌)
-                    criteria_issues = check_particle_sampling_criteria(analysis_rows)
+                    input_b6 = (
+                        str(input2_ws.Range("B6").Value or "").strip()
+                        if input2_ws else ""
+                    )
+                    input_b7 = (
+                        to_float_if_pure_number(input2_ws.Range("B7").Value)
+                        if input2_ws else None
+                    )
+                    criteria_issues = check_particle_sampling_criteria(
+                        analysis_rows,
+                        input_b6=input_b6,
+                        input_b7=input_b7,
+                    )
 
                     # (THC 검증)
                     thc_issues = []

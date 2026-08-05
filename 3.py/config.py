@@ -61,11 +61,28 @@ _URLS = {
     "FIELD_URL_WATER": "https://측정인.kr/ms/field_water.do",
 }
 
+_GROUPWARE = {
+    "ENABLED": "1",
+    "BASE_URL": "http://192.168.10.163:8081",
+    "API_TOKEN": "",
+    "REPORT_DATA_PATH": "/api/external/report_data",
+    "REPORT_SYNC_PATH": "/api/reports/sync",
+    "REPORT_PDF_PATH": "/api/external/report_pdf",
+    "EXCEL_OUTPUT_DIR": r"%(REVIEW_ROOT)s\6.그룹웨어전송",
+    "TIMEOUT_SEC": "30",
+    "MAX_RETRIES": "2",
+}
+
 # DEFAULT에 경로·URL도 넣어 %(REPORT_BASE)s 등 치환이 동작하도록 함
 _DEFAULT.update(_PATHS)
 _DEFAULT.update(_URLS)
 
-config.read_dict({"DEFAULT": _DEFAULT, "PATHS": _PATHS, "URLS": _URLS})
+config.read_dict({
+    "DEFAULT": _DEFAULT,
+    "PATHS": _PATHS,
+    "URLS": _URLS,
+    "GROUPWARE": _GROUPWARE,
+})
 
 if os.path.exists(CONFIG_PATH):
     config.read(CONFIG_PATH, encoding="utf-8")
@@ -74,13 +91,22 @@ else:
 
 
 def cfg(key: str, section: str | None = None) -> str:
-    """설정값 조회. section 미지정 시 PATHS → URLS → DEFAULT 순."""
+    """설정값 조회. section 미지정 시 PATHS → URLS → GROUPWARE → DEFAULT 순."""
     if section:
         return config.get(section, key)
-    for sec in ("PATHS", "URLS", "DEFAULT"):
+    for sec in ("PATHS", "URLS", "GROUPWARE", "DEFAULT"):
         if config.has_option(sec, key):
             return config.get(sec, key)
     raise KeyError(key)
+
+
+def cfg_bool(key: str, section: str = "GROUPWARE", default: bool = False) -> bool:
+    """1/true/yes/on 이면 True."""
+    try:
+        raw = cfg(key, section).strip().lower()
+    except KeyError:
+        return default
+    return raw in ("1", "true", "yes", "on")
 
 
 def cfg_list(key: str) -> list[str]:
@@ -132,3 +158,13 @@ FIELD_URL_AIR = cfg("FIELD_URL_AIR")
 FIELD_URL_WATER = cfg("FIELD_URL_WATER")
 # 하위 호환
 FIELD_URL = FIELD_URL_AIR
+
+GROUPWARE_ENABLED = cfg_bool("ENABLED", "GROUPWARE", default=False)
+GROUPWARE_BASE_URL = cfg("BASE_URL", "GROUPWARE")
+GROUPWARE_API_TOKEN = cfg("API_TOKEN", "GROUPWARE")
+GROUPWARE_REPORT_DATA_PATH = cfg("REPORT_DATA_PATH", "GROUPWARE")
+GROUPWARE_REPORT_SYNC_PATH = cfg("REPORT_SYNC_PATH", "GROUPWARE")
+GROUPWARE_REPORT_PDF_PATH = cfg("REPORT_PDF_PATH", "GROUPWARE")
+GROUPWARE_EXCEL_OUTPUT_DIR = cfg("EXCEL_OUTPUT_DIR", "GROUPWARE")
+GROUPWARE_TIMEOUT_SEC = cfg("TIMEOUT_SEC", "GROUPWARE")
+GROUPWARE_MAX_RETRIES = cfg("MAX_RETRIES", "GROUPWARE")

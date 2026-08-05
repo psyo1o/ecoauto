@@ -914,7 +914,9 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        from log_utils import run_log
+        with run_log("dash"):
+            main()
     except Exception as e:
         log_error("dash.main", e)
         raise

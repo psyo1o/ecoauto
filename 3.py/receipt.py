@@ -7,8 +7,6 @@
 """
 import os
 import re
-import io
-import csv
 import datetime as dt
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -26,9 +24,6 @@ from openpyxl import load_workbook, Workbook
 from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 from excel_utils import autofit_columns
-
-# ★추가(샘플 형태 비교용)
-import hashlib
 
 #===================경고 제거========================
 # ✅ openpyxl 조건부서식 경고 숨김 (오류 아님, 콘솔 정리용)
@@ -53,6 +48,7 @@ from data_utils import (
 )
 from log_utils import log_error
 from cancel_utils import is_cancelled
+from backdata_utils import compare_backdata_with_report
 from config import (
     REPORT_BASE,
     REPORT_WORKFLOW_DIRS,
@@ -60,9 +56,6 @@ from config import (
     DAEJANG_ROOT,
     MOISTURE_ROOT,
     THC_ROOT,
-    MOISTURE_SAMPLE,
-    THC_CSV_SAMPLE,
-    THC_FID_SAMPLE,
 )
 
 
@@ -73,9 +66,6 @@ BASE_ROOT = REPORT_BASE
 REPORT_DIRS = REPORT_WORKFLOW_DIRS
 OUTPUT_ROOT = RECEIPT_REVIEW
 DAEJANG_DEFAULT_DIR = DAEJANG_ROOT
-
-# ★ 샘플 signature 캐시(속도)
-_TEMPLATE_SIG = {"moisture_csv": None, "thc_csv": None, "thc_fid": None}
 
 
 # -----------------------------
@@ -333,138 +323,6 @@ def build_report_status(base_status: str, sn_dj: str, rep_sn_b1: str) -> str:
 
 
 # =========================================================
-# ★추가: 샘플 기반 "형태" 비교(숫자만 바뀌는 파일 대응)
-# =========================================================
-def _read_text_any_encoding(path: str) -> str:
-    data = open(path, "rb").read()
-    for enc in ("utf-8-sig", "cp949", "euc-kr", "utf-16", "latin1"):
-        try:
-            return data.decode(enc)
-        except Exception:
-            continue
-    return data.decode("utf-8", errors="replace")
-
-def _normalize_text_for_signature(text: str, kind: str) -> str:
-    s = text.replace("\r\n", "\n").replace("\r", "\n")
-
-    # CSV 계열은 구조(헤더/컬럼수/데이터 컬럼수 일관성)만 남김
-    if kind in ("moisture_csv", "thc_csv"):
-        # 구분자 흔들림 대비(탭/세미콜론)
-        s2 = s.replace("\t", ",")
-        if s2.count(";") > s2.count(","):
-            s2 = s2.replace(";", ",")
-
-        rows = []
-        for row in csv.reader(io.StringIO(s2)):
-            row = [c.strip() for c in row]
-            # 끝 빈컬럼 제거(,, 제거)
-            while row and row[-1] == "":
-                row.pop()
-            # 완전 빈 줄 제거(,,,, 같은 줄)
-            if not row or all(c == "" for c in row):
-                continue
-            rows.append(row)
-
-        if not rows:
-            return "csv|empty"
-
-        header = rows[0]
-        col_n = len(header)
-
-        # 데이터 줄들의 컬럼수 패턴만 기록(행 개수는 무시)
-        data_col_counts = set()
-        for r in rows[1:]:
-            data_col_counts.add(len(r))
-
-        header_join = ",".join(header).strip()
-
-        # 헤더에 시료번호/숫자 등이 섞여도 구조로 취급되게 토큰화
-        header_join = re.sub(r"[A-Za-z]\d{7}-\d{2,3}", "<SN>", header_join)
-        header_join = re.sub(r"(?<![A-Za-z])[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?", "<NUM>", header_join)
-
-        counts = ",".join(str(x) for x in sorted(data_col_counts)) if data_col_counts else "none"
-        return f"csv|cols={col_n}|header={header_join.lower()}|data_cols={counts}"
-
-    # FID는 기존처럼 “형태+토큰화”로 비교(원하면 이것도 구조형으로 바꿀 수 있음)
-    s = re.sub(r"[A-Za-z]\d{7}-\d{2,3}", "<SN>", s)
-    s = re.sub(r"\b\d{4}[/-]\d{2}[/-]\d{2}\b", "<DATE>", s)
-    s = re.sub(r"\b\d{2}[/-]\d{2}[/-]\d{2,4}\b", "<DATE>", s)
-    s = re.sub(r"\b\d{1,2}:\d{2}:\d{2}\b", "<TIME>", s)
-    s = re.sub(r"\b\d{1,2}:\d{2}\b", "<TIME>", s)
-    s = re.sub(r"(?<![A-Za-z])[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?", "<NUM>", s)
-    s = s.replace("\t", " ")
-    # FID 단위/깨진문자 정규화 (추가)
-    s = s.replace("캜", "c").replace("�C", "c")
-    s = re.sub(r"[ ]{2,}", " ", s)
-
-    lines = []
-    for line in s.split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        lines.append(line)
-
-    return "\n".join(lines).lower()
-
-
-
-def _sig(norm_text: str) -> str:
-    return hashlib.sha1(norm_text.encode("utf-8")).hexdigest()
-
-
-def _get_template_signature(kind: str) -> tuple[str | None, str]:
-    """
-    kind:
-      - moisture_csv : MOISTURE_SAMPLE
-      - thc_csv      : THC_CSV_SAMPLE
-      - thc_fid      : THC_FID_SAMPLE
-    """
-    if _TEMPLATE_SIG.get(kind):
-        return _TEMPLATE_SIG[kind], "OK"
-
-    if kind == "moisture_csv":
-        sample_path = MOISTURE_SAMPLE
-    elif kind == "thc_csv":
-        sample_path = THC_CSV_SAMPLE
-    elif kind == "thc_fid":
-        sample_path = THC_FID_SAMPLE
-    else:
-        return None, "kind오류"
-
-    if not os.path.exists(sample_path):
-        return None, f"샘플없음:{sample_path}"
-
-    try:
-        raw = _read_text_any_encoding(sample_path)
-        norm = _normalize_text_for_signature(raw, kind)
-        sigv = _sig(norm)
-        _TEMPLATE_SIG[kind] = sigv
-        return sigv, "OK"
-    except Exception:
-        return None, f"샘플읽기오류:{sample_path}"
-
-
-def validate_file_content_by_sample(path: str, kind: str) -> tuple[bool, str]:
-    """
-    샘플 기반 형태 검증
-    - 샘플 없으면 NG
-    - 형태 다르면 NG
-    """
-    tmpl_sig, msg = _get_template_signature(kind)
-    if tmpl_sig is None:
-        return False, f"샘플없음({msg})"
-
-    try:
-        raw = _read_text_any_encoding(path)
-        norm = _normalize_text_for_signature(raw, kind)
-        sigv = _sig(norm)
-        if sigv == tmpl_sig:
-            return True, ""
-        return False, "내용형태오류"
-    except Exception:
-        return False, "내용읽기오류"
-
-
 def _save_unique(report_wb: Workbook, out_path: str) -> str:
     """같은 파일명이 있으면 _2, _3 붙여서 저장"""
     if not os.path.exists(out_path):
@@ -652,7 +510,7 @@ def process_daejang(daejang_path: str,
 
 
             # -----------------------------
-            # 수분량 검사 (원래 로직 유지 + OK일 때만 샘플 비교 추가)
+            # 수분량 검사 (원래 로직 유지 + OK일 때만 성적서↔백데이터 정합 비교)
             # -----------------------------
             moisture_status = ""
             m_start_t = None
@@ -702,13 +560,15 @@ def process_daejang(daejang_path: str,
                                     m_end_dt = dt.datetime.combine(base_date, m_end_t)
                                     if m_ct >= m_end_dt and m_mt >= m_end_dt:
                                         moisture_status = "OK"
-                                        # ★추가: 확장자/파일시간 OK인 경우에만 샘플 형태 비교
-                                        ok, reason = validate_file_content_by_sample(m_path, "moisture_csv")
+                                        # 생성/수정시간 OK인 경우에만 성적서↔백데이터 내용 비교
+                                        ok, reason = compare_backdata_with_report(
+                                            rep_path, sn, m_path, "moisture"
+                                        )
                                         if not ok:
                                             moisture_status = reason
                                     else:
                                         moisture_status = "생성/수정 시간오류"
-            # THC 검사 (원래 로직 유지 + OK일 때만 샘플 비교 추가)
+            # THC 검사 (원래 로직 유지 + OK일 때만 성적서↔백데이터 정합 비교)
             # -----------------------------
             thc_status = ""
             thc_start_t = None
@@ -787,9 +647,11 @@ def process_daejang(daejang_path: str,
                                         thc_end_dt2 = dt.datetime.combine(base_date, thc_end_t)
                                         if thc_ct >= thc_end_dt2 and thc_mt >= thc_end_dt2:
                                             thc_status = "OK"
-                                            # ★추가: 확장자/파일시간 OK인 경우에만 샘플 형태 비교
+                                            # 생성/수정시간 OK인 경우에만 성적서↔백데이터 내용 비교
                                             kind = "thc_fid" if t_path.lower().endswith(".fid") else "thc_csv"
-                                            ok, reason = validate_file_content_by_sample(t_path, kind)
+                                            ok, reason = compare_backdata_with_report(
+                                                rep_path, sn, t_path, kind
+                                            )
                                             if not ok:
                                                 thc_status = reason
                                         else:
@@ -860,17 +722,32 @@ def process_daejang(daejang_path: str,
 # 콘솔(stdout/stderr) 출력 → UI 로그창으로 전달
 # -----------------------------
 class QueueWriter:
-    """print() 출력(stdout/stderr)을 queue로 모으는 writer"""
+    """print() 출력(stdout/stderr)을 queue로 모으고, 이전 스트림(4.log tee)에도 전달."""
 
-    def __init__(self, q: queue.Queue):
+    def __init__(self, q: queue.Queue, also=None):
         self.q = q
+        self.also = also
 
     def write(self, msg: str):
-        if msg:
+        if not msg:
+            return 0
+        try:
             self.q.put(msg)
+        except Exception:
+            pass
+        if self.also is not None:
+            try:
+                self.also.write(msg)
+            except Exception:
+                pass
+        return len(msg)
 
     def flush(self):
-        pass
+        if self.also is not None:
+            try:
+                self.also.flush()
+            except Exception:
+                pass
 
 
 # -----------------------------
@@ -929,9 +806,11 @@ class App:
         self.log_text.pack(fill="both", expand=True)
         self.log_text.configure(state="disabled")
 
-        # print()/에러 출력이 UI 로그로 가도록 리다이렉트
-        sys.stdout = QueueWriter(self.log_q)
-        sys.stderr = QueueWriter(self.log_q)
+        # print()/에러 출력이 UI 로그로 가도록 리다이렉트 (4.log tee 유지)
+        self._orig_stdout = sys.stdout
+        self._orig_stderr = sys.stderr
+        sys.stdout = QueueWriter(self.log_q, also=self._orig_stdout)
+        sys.stderr = QueueWriter(self.log_q, also=self._orig_stderr)
 
         # queue에 쌓인 로그를 주기적으로 UI에 뿌려줌
         self._pump_log()
@@ -1052,7 +931,9 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        from log_utils import run_log
+        with run_log("receipt"):
+            main()
     except Exception as e:
         log_error("receipt.main", e)
         raise
