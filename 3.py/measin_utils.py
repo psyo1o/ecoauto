@@ -214,6 +214,166 @@ def get_samples_current_page(driver, prefix: str = "A") -> list:
     return list(dict.fromkeys(arr))
 
 
+# 탭4 입력완료 후 목록 RealGrid '상태' 열 확인용
+# 목록 그리드: [시료번호] … 오른쪽 두 번째 열 = [상태]
+TAB4_LIST_SUCCESS_STATUS = "측정분석결과 입력완료"
+TAB4_LIST_STATUS_OFFSET = 2  # 시료번호 열에서 오른쪽으로 몇 칸
+
+
+def _norm_status_text(s: str) -> str:
+    return re.sub(r"\s+", "", (s or "").replace("*", "").strip())
+
+
+def _is_tab4_success_status(status: str, success_text: str = TAB4_LIST_SUCCESS_STATUS) -> bool:
+    if not status:
+        return False
+    a, b = _norm_status_text(status), _norm_status_text(success_text)
+    return a == b or b in a
+
+
+def _read_list_row_status(driver, sample_no: str) -> str | None:
+    """
+    목록 RealGrid: 시료번호 행 → 그 행에서 시료번호 열 + 2칸(상태).
+    셀 값은 td 안의 .rg-renderer 텍스트 우선
+    (예: <div class="rg-renderer">측정분석결과 입력완료</div>).
+    """
+    js = r"""
+    const sampleNo = arguments[0];
+    const statusOff = arguments[1];
+    // RealGrid 셀: .rg-renderer 가 실제 표시 문구
+    const cellText = (td) => {
+      if (!td) return "";
+      const ren = td.querySelector(".rg-renderer");
+      const raw = ren
+        ? (ren.innerText || ren.textContent || "")
+        : (td.innerText || td.textContent || "");
+      return (raw + "").replace(/\s+/g, " ").trim();
+    };
+    const headText = (el) => ((el && (el.innerText || el.textContent)) || "")
+      .replace(/\*/g, "").replace(/\s+/g, " ").trim();
+
+    const roots = Array.from(document.querySelectorAll(".rg-root"));
+    for (const root of roots) {
+      const headTables = Array.from(root.querySelectorAll(
+        ".rg-fixed-header table, .rg-scroll-header table, .rg-header table, .rg-head table"
+      ));
+      const seenHead = new Set();
+      const heads = [];
+      for (const t of headTables) {
+        if (seenHead.has(t)) continue;
+        seenHead.add(t);
+        heads.push(t);
+      }
+      if (!heads.length) continue;
+
+      const headers = [];
+      for (const tbl of heads) {
+        const row = tbl.querySelector("thead tr:last-child") || tbl.querySelector("tr:last-child");
+        if (!row) continue;
+        for (const c of row.querySelectorAll("th, td")) headers.push(headText(c));
+      }
+      if (!headers.length) continue;
+
+      let cSample = headers.findIndex(h => h === "시료번호" || h === "시료 번호");
+      if (cSample < 0) cSample = headers.findIndex(h => h && h.indexOf("시료번호") >= 0);
+      if (cSample < 0) continue;
+      const cStatus = cSample + statusOff;
+
+      const bodyTables = Array.from(root.querySelectorAll(
+        ".rg-fixed-body table, .rg-scroll-body table, .rg-body table"
+      ));
+      const seenBody = new Set();
+      const bodies = [];
+      for (const t of bodyTables) {
+        if (seenBody.has(t)) continue;
+        seenBody.add(t);
+        bodies.push(t);
+      }
+      if (!bodies.length) continue;
+
+      const maxRows = Math.max(0, ...bodies.map(t => t.querySelectorAll("tbody tr").length));
+      for (let ri = 0; ri < maxRows; ri++) {
+        const texts = [];
+        for (const tbl of bodies) {
+          const tr = tbl.querySelectorAll("tbody tr")[ri];
+          if (!tr) continue;
+          for (const td of tr.querySelectorAll("td")) texts.push(cellText(td));
+        }
+        if (cSample >= texts.length) continue;
+        if (texts[cSample] !== sampleNo) continue;
+        if (cStatus >= texts.length) return "";
+        return texts[cStatus] || "";
+      }
+    }
+    return null;
+    """
+    try:
+        return driver.execute_script(js, sample_no, int(TAB4_LIST_STATUS_OFFSET))
+    except Exception:
+        return None
+
+
+def verify_tab4_list_status(
+    driver,
+    sample_no: str,
+    search_box: str = "#search_meas_mgmt_no",
+    success_text: str = TAB4_LIST_SUCCESS_STATUS,
+) -> tuple[str, str]:
+    """
+    탭4 입력 후 목록 복귀 → 해당 행 상태열(시료번호+2) 확인.
+
+    상세 진입 때 이미 시료번호로 검색한 상태이므로, 복귀 직후엔 재검색 없이 읽는다.
+    행을 못 찾을 때만 시료번호 재검색 후 한 번 더 시도.
+
+    Returns:
+      (결과, 상태문구)  결과: "성공" | "실패" | "확인불가"
+    """
+    if not is_field_list_ready(driver, search_box):
+        return "확인불가", "(목록 화면 아님)"
+
+    try:
+        wait_grid_loaded(driver, timeout=8, warn_msg="⚠ 목록 RealGrid 상태 확인 대기")
+    except Exception:
+        pass
+
+    status = None
+    for _ in range(3):
+        status = _read_list_row_status(driver, sample_no)
+        if status is not None and str(status).strip() != "":
+            break
+        time.sleep(0.8)
+
+    # 현재 목록에 없으면(페이지/필터 등) 그때만 시료번호 재검색
+    if status is None:
+        try:
+            inp = driver.find_element(By.CSS_SELECTOR, search_box)
+            try:
+                inp.clear()
+            except Exception:
+                driver.execute_script("arguments[0].value='';", inp)
+            inp.send_keys(sample_no)
+            time.sleep(0.2)
+            safe_click(driver, "#btnSearch")
+            time.sleep(1.2)
+            wait_grid_loaded(driver, timeout=8, warn_msg="⚠ 목록 RealGrid 재검색 대기")
+            for _ in range(2):
+                status = _read_list_row_status(driver, sample_no)
+                if status is not None and str(status).strip() != "":
+                    break
+                time.sleep(0.8)
+        except Exception as e:
+            return "확인불가", f"(재검색 실패: {e})"
+
+    if status is None:
+        return "확인불가", "(시료번호 행을 못 찾음)"
+    if str(status).strip() == "":
+        return "확인불가", "(상태 열 비어있음)"
+
+    if _is_tab4_success_status(status, success_text):
+        return "성공", status
+    return "실패", status
+
+
 # 시료 상세 진입 실패 시 — 목록 복귀 후 시료번호 검색부터 재시도 (eco_input / eco_check 공통)
 MAX_SAMPLE_DETAIL_RETRY = 3
 

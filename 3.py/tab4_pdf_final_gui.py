@@ -25,6 +25,8 @@ import tkinter as tk
 import shutil
 from tkinter import ttk, filedialog, messagebox
 
+from gui_common import bind_text_mousewheel
+
 # ------------------------------
 # Drag & Drop (옵션)
 # ------------------------------
@@ -235,12 +237,16 @@ class ExcelPdfExporter:
                     pass
 
 
+# 파일당 PDF 변환 시도 횟수 (1회 실패 시 자동 재시도 1번)
+PDF_CONVERT_MAX_ATTEMPTS = 2
+
 
 class AppBase:
     def __init__(self):
         self.files = []
         self.output_dir = ""
         self._stop = False
+        self._running = False
 
         # root
         if HAS_DND:
@@ -349,8 +355,18 @@ class AppBase:
         self.progress = ttk.Progressbar(bot, mode="determinate")
         self.progress.grid(row=0, column=0, sticky="ew")
 
-        self.txt_log = tk.Text(bot, height=12, wrap="word", state="disabled")
-        self.txt_log.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+        log_frame = ttk.Frame(bot)
+        log_frame.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
+
+        self.txt_log = tk.Text(log_frame, height=12, wrap="word", state="disabled")
+        self.txt_log.grid(row=0, column=0, sticky="nsew")
+
+        log_sb = ttk.Scrollbar(log_frame, orient="vertical", command=self.txt_log.yview)
+        log_sb.grid(row=0, column=1, sticky="ns")
+        self.txt_log.configure(yscrollcommand=log_sb.set)
+        bind_text_mousewheel(self.txt_log, log_frame)
 
         # 4) 실행 버튼
         actions = ttk.Frame(outer)
@@ -361,8 +377,8 @@ class AppBase:
         self.btn_run = ttk.Button(actions, text="PDF 생성 시작", command=self._start)
         self.btn_run.grid(row=0, column=0, sticky="ew", padx=4)
 
-        self.btn_quit = ttk.Button(actions, text="닫기", command=self.root.destroy)
-        self.btn_quit.grid(row=0, column=1, sticky="ew", padx=4)
+        self.btn_cancel = ttk.Button(actions, text="취소", command=self._on_cancel, state="disabled")
+        self.btn_cancel.grid(row=0, column=1, sticky="ew", padx=4)
 
     def _parse_drop_files(self, data: str):
         # Windows DND는 중괄호로 감싸진 경로가 올 수 있음
@@ -498,9 +514,95 @@ class AppBase:
         return True
 
     def _set_running(self, running: bool):
+        self._running = running
         self.btn_run.configure(state=("disabled" if running else "normal"))
-        self.btn_quit.configure(state=("disabled" if running else "normal"))
-        # 리스트/버튼 잠금은 간단히 생략(필요하면 추가)
+        self.btn_cancel.configure(state=("normal" if running else "disabled"))
+
+    def _on_cancel(self):
+        if not self._running:
+            return
+        self._stop = True
+        self.btn_cancel.configure(state="disabled")
+        self._log("취소 요청됨... 현재 파일 처리 후 중단합니다.")
+
+    def _convert_workbook(self, exporter, xls, tmp_dir):
+        """단일 엑셀 PDF 변환. 실패 시 최대 PDF_CONVERT_MAX_ATTEMPTS회 시도."""
+        cover_cands = self._sheet_candidates(self.ent_sheet_cover.get())
+        analy_cands = self._sheet_candidates(self.ent_sheet_analy.get())
+        record_cands = self._sheet_candidates(self.ent_sheet_record.get())
+        last_err = None
+
+        for attempt in range(1, PDF_CONVERT_MAX_ATTEMPTS + 1):
+            try:
+                res = exporter.build_pdfs_for_workbook(
+                    excel_path=xls,
+                    out_dir=self.output_dir,
+                    tmp_dir=tmp_dir,
+                    sheet_cover_cands=cover_cands,
+                    sheet_analy_cands=analy_cands,
+                    sheet_record_cands=record_cands,
+                )
+                return res, None
+            except Exception as e:
+                last_err = e
+                if attempt < PDF_CONVERT_MAX_ATTEMPTS:
+                    self._log(
+                        f"  ⚠ 실패 — 재시도 {attempt}/{PDF_CONVERT_MAX_ATTEMPTS - 1}: {e}"
+                    )
+                    time.sleep(0.8)
+        return None, last_err
+
+    def _log_failure_summary(self, failed_list):
+        self._log("--- 실패 목록 ---")
+        for idx, (path, err) in enumerate(failed_list, 1):
+            self._log(f"  {idx}. {os.path.basename(path)}")
+            self._log(f"      사유: {err}")
+            self._log(f"      경로: {path}")
+
+    def _show_failure_dialog(self, failed_list, ok_count, stopped):
+        lines = []
+        for path, err in failed_list[:12]:
+            lines.append(f"· {os.path.basename(path)}\n  {err}")
+        body = "\n".join(lines)
+        if len(failed_list) > 12:
+            body += f"\n… 외 {len(failed_list) - 12}건"
+
+        title = "PDF 변환 취소됨" if stopped else "PDF 변환 실패"
+        msg = (
+            f"성공 {ok_count}건 / 실패 {len(failed_list)}건\n\n"
+            f"{body}\n\n"
+            "실패한 파일만 목록에 남기고 다시 시도할까요?"
+        )
+        if messagebox.askyesno(title, msg, parent=self.root):
+            self._set_files_for_retry([p for p, _ in failed_list])
+
+    def _set_files_for_retry(self, paths):
+        self.files = list(paths)
+        self.lst.delete(0, "end")
+        for p in self.files:
+            self.lst.insert("end", p)
+        self._log(f"실패 {len(paths)}건 — 목록 갱신 후 재시도합니다.")
+        self._start()
+
+    def _on_worker_done(self, ok, fail, failed_list, stopped):
+        self._set_running(False)
+        if stopped:
+            self._log(f"=== 취소됨: 성공 {ok} / 실패 {fail} ===")
+        else:
+            self._log(f"=== 완료: 성공 {ok} / 실패 {fail} ===")
+
+        if failed_list:
+            self._log_failure_summary(failed_list)
+            self._log(
+                "실패 원인: 시트명·숨김 시트·엑셀 보호·다른 프로그램에서 열림(잠김) 등을 확인해 주세요."
+            )
+            self._show_failure_dialog(failed_list, ok, stopped)
+        elif not stopped:
+            messagebox.showinfo(
+                "PDF 변환 완료",
+                f"전체 {ok}건 변환에 성공했습니다.",
+                parent=self.root,
+            )
 
     def _start(self):
         if not self._validate():
@@ -514,6 +616,7 @@ class AppBase:
             exporter = ExcelPdfExporter(self._log)
             ok = 0
             fail = 0
+            failed_list = []
 
             try:
                 exporter.start()
@@ -527,31 +630,19 @@ class AppBase:
                     base = os.path.basename(xls)
                     self._log(f"({i}/{total}) 처리 시작: {base}")
 
-                    try:
-                        cover_cands = self._sheet_candidates(self.ent_sheet_cover.get())
-                        analy_cands = self._sheet_candidates(self.ent_sheet_analy.get())
-                        record_cands = self._sheet_candidates(self.ent_sheet_record.get())
-                        res = exporter.build_pdfs_for_workbook(
-                            excel_path=xls,
-                            out_dir=self.output_dir,
-                            tmp_dir=tmp_dir,
-                            sheet_cover_cands=cover_cands,
-                            sheet_analy_cands=analy_cands,
-                            sheet_record_cands=record_cands
-                        )
+                    res, err = self._convert_workbook(exporter, xls, tmp_dir)
+                    if res:
                         self._log(f"  - 업로드1 생성: {os.path.basename(res['upload1'])}")
                         self._log(f"  - 업로드2 생성: {os.path.basename(res['upload2'])}")
                         self._log(f"  ✅ 최종본 저장: {res['final']}")
                         ok += 1
-                    except Exception as e:
-                        self._log(f"  ❌ 실패: {base} / {e}")
+                    else:
+                        self._log(f"  ❌ 최종 실패: {base} / {err}")
                         fail += 1
+                        failed_list.append((xls, str(err)))
 
                     self.root.after(0, lambda v=i: self._set_progress(v))
 
-                self._log(f"=== 완료: 성공 {ok} / 실패 {fail} ===")
-                if fail:
-                    self._log("실패한 파일은 시트명/숨김 여부/엑셀 보호/열린 상태(잠김) 등을 확인해 주세요.")
             except Exception as e:
                 self._log("치명적 오류: " + str(e))
                 self._log(traceback.format_exc())
@@ -564,7 +655,9 @@ class AppBase:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
                 except Exception:
                     pass
-                self.root.after(0, lambda: self._set_running(False))
+                stopped = self._stop
+                summary = (ok, fail, list(failed_list), stopped)
+                self.root.after(0, lambda s=summary: self._on_worker_done(*s))
 
         threading.Thread(target=worker, daemon=True).start()
 

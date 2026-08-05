@@ -459,7 +459,9 @@ class ReportCheckFileListGUI:
 
 
 def main():
-    ReportCheckFileListGUI().run()
+    from log_utils import run_log
+    with run_log("report_check_gui"):
+        ReportCheckFileListGUI().run()
 
 
 if __name__ == "__main__":
