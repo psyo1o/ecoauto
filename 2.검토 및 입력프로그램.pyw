@@ -58,6 +58,7 @@ PROGRAM_GROUPS = (
         "accent": "#5B8A72",
         "items": (
             ("1. 측정인 자동입력", "eco_input_gui.py"),
+            ("8. 그룹웨어 전송(재전송,직접)", "groupware_resend_gui.py"),
         ),
     },
     {
