@@ -3,6 +3,7 @@
 공통 형식 변환 함수
 """
 
+import re
 from datetime import datetime, time, date
 from typing import Union
 
@@ -285,3 +286,23 @@ def normalize_tab1_select_field(field: str, values) -> list:
     if field == "장비":
         return normalize_tab1_equipment_list(values)
     return [str(x).strip() for x in (values or []) if str(x).strip()]
+
+
+def norm_facility_label(s) -> str:
+    """측정시설/측정인 시설명 비교용 정규화(공백 제거)."""
+    if s is None:
+        return ""
+    return re.sub(r"\s+", "", str(s).strip())
+
+
+def facility_labels_match(site_val, excel_val) -> bool:
+    """탭1 측정시설 선택값 vs 입력!E4 측정인 시설명."""
+    a = norm_facility_label(site_val)
+    b = norm_facility_label(excel_val)
+    if not a and not b:
+        return True
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return a in b or b in a

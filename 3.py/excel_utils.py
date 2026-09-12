@@ -107,12 +107,18 @@ def parse_measuring_record(excel_path: str, sample_no: str) -> dict:
     data["인력"] = []
     data["차량"] = []
     data["장비"] = []
+    data["측정인시설명"] = ""
+    data["측정목적"] = ""
 
     if "입력" in wb.sheetnames:
         ws_input = wb["입력"]
         # 업소명 (eco_check용)
         v_comp = ws_input["H7"].value
         data["업소명"] = "" if v_comp is None else str(v_comp).strip()
+
+        # 측정인 시설명 (E4) — 탭1 측정시설 Select2 / eco_check 검증
+        v_fac = ws_input["E4"].value
+        data["측정인시설명"] = "" if v_fac is None else str(v_fac).strip()
 
         # 측정목적 (F10) — 1=자가측정용, 2=참고용 (eco_input 탭1·eco_check 검증)
         v_purpose = ws_input["F10"].value

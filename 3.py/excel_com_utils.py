@@ -10,6 +10,56 @@ import win32clipboard
 
 _EXCEL_APP = None
 
+
+def ungroup_excel_sheets(wb, prefer_sheet=None) -> bool:
+    """
+    Ctrl로 여러 시트가 선택된 채 저장된 통합문서의 그룹을 해제한다.
+    그룹 상태면 Range 쓰기·ExportAsFixedFormat 이 선택된 시트 전부에 적용될 수 있다.
+    prefer_sheet: 시트 객체 또는 시트 이름. 해제 후 이 시트를 활성으로 둔다.
+    """
+    if wb is None:
+        return False
+
+    grouped = False
+    try:
+        grouped = int(wb.Windows(1).SelectedSheets.Count) > 1
+    except Exception:
+        grouped = False
+
+    ws = None
+    if prefer_sheet is not None:
+        try:
+            ws = prefer_sheet if not isinstance(prefer_sheet, str) else wb.Worksheets(prefer_sheet)
+        except Exception:
+            ws = None
+    if ws is None:
+        try:
+            ws = wb.ActiveSheet
+        except Exception:
+            try:
+                ws = wb.Worksheets(1)
+            except Exception:
+                return False
+
+    ok = False
+    try:
+        ws.Select(True)  # Replace=True → 그룹 해제
+        ok = True
+    except Exception:
+        try:
+            ws.Activate()
+            ok = True
+        except Exception:
+            ok = False
+
+    if grouped and ok:
+        try:
+            print(f"▶ 엑셀 시트 다중선택 해제 → '{ws.Name}'")
+        except Exception:
+            print("▶ 엑셀 시트 다중선택 해제")
+    return ok
+
+
 def get_excel_app():
     """
     엑셀 COM 객체를 1번만 띄워 재사용.

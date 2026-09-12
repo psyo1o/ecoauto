@@ -1000,12 +1000,12 @@ def check_device_missing_but_measured(analysis_rows, fugitive_rows,
         issues.append("[장비누락] 총탄화수소 측정인데 입력 시트에 대기배출가스(THC)측정기 장비가 없음")
 
     # ✅ 수분량자동측정기 ↔ 입력!B18(사용) 정합성 체크
+    #    - B18='사용'인데 장비표에 없음 → 오류
+    #    - 장비표에 있는데 B18 미사용 → 허용 (현장 선택)
     #    비산먼지(샘플2가 비산먼지 양식)면 PASS
     if not is_fugitive:
         b18_is_use = (str(b18_value or "").strip() == "사용")
 
-        if has_moisture_auto and (not b18_is_use):
-            issues.append("[장비불일치] 수분량자동측정기 장비 표기 있음 수분량자동측정기 '사용'이 아님")
         if (not has_moisture_auto) and b18_is_use:
             issues.append("[장비불일치] 수분량자동측정기 '사용'인데 입력 장비표에 수분량자동측정기 표기가 없음")
     # ✅ [추가] 입력!B18이 "사용"이 아니면(=미사용 포함) 가스상 샘플러가 필요

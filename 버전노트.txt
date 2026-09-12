@@ -1,4 +1,17 @@
+  2026-09-12
+- measurements[].standard 추가: 입력(분석값) H열 기준치(배출허용기준농도) API 전송 (별칭 permit_limit 등)
+- measurements[].unit = 대기측정기록부 I열(농도 단위), standard_unit = F열(배출허용기준 단위) 분리
+- 그룹웨어 매칭을 수신 정본 `\\192.168.10.163\docker\approval_mvp\docs\ECO_INPUT_MATCHING.md` 에 맞춤
+  - 시설: facility_name(E4) 1차 → sems_stack(E2) 폴백 (수신 extract_outlet_hint 키 포함)
+  - report_pdf Form에 facility_name·site_no·biz_no 포함
+  - 로컬 `그룹웨어_연동_시설매칭_스펙.md` / readme 매핑표 갱신
 0.검토 및 입력프로그램 (통합 런처)
+  2026-09-11
+- 필수 패키지 목록을 `0.처음사용시\requirements.txt` 로 분리 (`req_utils.py` 로더)
+- 설치 py·런처가 동일 txt 참조 (하드코딩 제거)
+- 런처 시작 시 미설치 패키지 안내 창 → pip 설치 → 재시작
+- 통합설치.py는 로직 복제 없이 개별 스크립트만 순차 호출 (`보안경고시 실행.py` / 크롬 / 패키지, `--no-pause`)
+- `보안경고시 실행.REG` 삭제 → `보안경고시 실행.py`가 winreg로 동일 키 직접 적용
   2026-07-11
 - `0.처음사용시` 설치 도구 `.bat` 3개를 `.py`로 교체 (Windows Smart App Control이 NAS .bat 차단하는 문제 대응, 동작 동일)
   2026-05-26
@@ -104,6 +117,33 @@
 - 모드1/모드2는 쓰는 입력란만 표시. 수질은 탭2+탭4 동시 선택 유지
 - `_main_air`/`_main_water` 인자 이름·키워드 호출은 그대로. 창 기본 860×640
 - 문서: `readme.md` §4-1, `파일별_설명.md` 3-1
+  측정인 자동입력 V3.7
+  2026-08-14 ~ 2026-08-21
+- 런처 8번: `groupware_resend_gui.py` (로그 재전송 / 성적서 직접 전송)
+- 재전송·직접전송: 데이터+PDF (`copy_to_nas=False` — 0 5.최종완료·0.PDF 미복사)
+- 조회: 「PDF 없음 포함」기본 ON. `재전송상태=완료`여도 PDF N/A·FAIL은 대상
+- 완료 건 재조회 버그 수정: 완료면 옛 로그 데이터전송=FAIL 무시. 성공 시 PDF/데이터 열 OK 갱신
+- openpyxl Data Validation 경고 숨김 (재전송 GUI·groupware_client)
+- 엑셀 시트 다중선택 해제: `excel_com_utils.ungroup_excel_sheets` (탭4 매크로·PDF·백데이터 COM)
+- 이어서 작업용 지침: `작업이어하기_수정지침.md`
+  2026-08-24
+- 그룹웨어 거래처 매칭: `company_name`=입력!H7 사업장명(업체명), `facility_name`/`facility_alt`=입력!E4 측정인 시설명
+  (그룹웨어 G열=사업장 / K열=측정시설 대응). 의뢰기관명만 보내지 않음. eco_input·8번 재전송/직접전송 공통(`build_payload_air`)
+  측정인 자동입력 V3.8
+  2026-09-08
+- 탭1 측정시설: 입력!E4 측정인 시설명 → `#edit_emis_fac_no` Select2 선택 (`set_emis_fac_from_excel`)
+  - 순서: 측정항목·인력·차량·장비 입력 후 → 측정시설 → 선택 직후 약 0.8초 대기 → 저장
+- 탭2 기상: `select.meas_wthr` 선택 (`set_weather`), 표준산소농도: `#basis_o2c` Select2 (`set_basis_o2c`)
+- 문서: `readme.md` §4-1-2·§4-2·§4-4, `파일별_설명.md`
+  측정인 자동입력 V3.9
+  2026-09-12
+- 그룹웨어 수신 정본 정렬: `\\192.168.10.163\docker\approval_mvp\docs\ECO_INPUT_MATCHING.md`
+  - `site_no`=입력!H6, `company_name`=H7(G전체), `facility_name`=E4, `sems_stack`=E2 폴백
+  - measurements: `standard`(기준치 H) + `standard_unit`(기록부 F) / 농도 `unit`(기록부 I)
+  - report_pdf Form에 site_no·facility_name·biz_no 포함
+- 탭4 목록 「상태」확인: 입력완료 후 RealGrid 상태열 (`측정분석결과 입력완료`)
+- 런처: requirements.txt·패키지 자동설치, 설치 도구 .bat→.py, 시작 토스트
+- 문서: readme / 파일별_설명 / 그룹웨어_연동_시설매칭_스펙 / SITE_NO_연동안내 / 작업이어하기_수정지침
 
 
 2.측정인 검토 V2.0
@@ -130,6 +170,14 @@
   측정인 검토 V2.8
   2026-06-06
 - 로그인 세션 만료 시 확인창 처리 후 재로그인·날짜 검색 복구, 실패 시료부터 재시도 (eco_input과 동일, measin_utils 공통화)
+  측정인 검토 V2.9
+  2026-09-08
+- 탭1 측정시설 검증: 사이트 `#edit_emis_fac_no` 선택값 ↔ 입력!E4 (`측정시설` 항목 OK/NG, 공백 무시·포함 매칭)
+- 탭3 현장사진: `#photo0~2` 저장 → `MEASIN_PHOTO_DIR\{연도}\{N월}\{시료}_PIC1~3`
+- PDF 저장: `MEASIN_PDF_DIR\{연도}\{N월}\{시료}.pdf` (예: `...\3.측정인 검토\PDF\2026\9월\`)
+- 요약 시트: 해당 팀 시료만 사진 표시, 각 시료 **PDF 열기 바로 아래**에 현장사진 배치 (하단 전체 갤러리 제거)
+- 비교 항목 `현장사진1~3`: 파일 있으면 OK, 없으면 NG
+- 기상 select 읽기(`get_weather_text`) 반영
 
 3.발송대장검토 V1.4
 FID 사용시 샘플 메소드 이름 글자수 변경
@@ -167,6 +215,12 @@ THC, 배출가스자동측정기 실제 채취시간으로 중복 여부 판단
   종합 검토 V1.8
   2026-06-06
 - 결과 엑셀 대시보드/상세/원인집계 시트 사용 열 전체 오토핏 (A~max_column)
+  종합 검토 V1.9
+  2026-09-08
+- 현장사진 유무 검토: eco_check 요약 `현장사진1~3` → 시료별 `현장사진상태`(OK/NG/확인불가)
+  - NG면 검토_종합·최종_종합에 반영, 대시보드·원인집계에 건수/표 추가
+  - 구버전 `없음`/`파일없음` 표기도 NG로 정규화
+- 요약 미리보기 행(`PDF 열기`/`현장사진`/`PIC*`)·하단 갤러리 구간은 집계에서 제외
 
 5.성적서 검토 V2.2
 비산먼지 양식 변경(입력(분석값)으로 농도 이동)으로 수정
@@ -215,3 +269,6 @@ sample-3에 입자상 채취기준 검토 추가
 분석일지 측정기록부 2개씩 나왔던거 수정
   PDF 생성 V1.2
 하드코딩된 NAS 경로를 config.ini 및 config.py로 분리하여 중앙 관리
+2026-08-25
+- 사업장관리번호 주 셀을 입력!H6으로 변경 (구 K7 폴백 유지, groupware_client.read_input_sheet_keys)
+- 그룹웨어 연동: 입력!K7 사업장관리번호를 site_no로 전송 (매칭 최우선; 없으면 기존 company_name)

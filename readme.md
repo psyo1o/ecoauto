@@ -1,7 +1,9 @@
 # 측정인 자동화 도구 안내서
 
-> 마지막 업데이트: 2026-08-13 (`3.py`, V3.6)
+> 마지막 업데이트: 2026-09-11 (`0.처음사용시` requirements·통합설치 오케스트레이션, 런처 패키지 자동설치)
 > 대상 독자: 처음 사용하는 담당자, 인수인계 받는 사용자, 운영 담당자
+>
+> **개발·수정 이어서 하기**: 같은 폴더의 [`작업이어하기_수정지침.md`](작업이어하기_수정지침.md) 참고 (최근 변경·수정 시 주의사항)
 
 ---
 
@@ -52,29 +54,19 @@ Windows 전용인 이유는 다음 기능을 사용하기 때문이다.
 
 > Windows 11 Smart App Control이 NAS의 `.bat`를 차단하는 경우가 있어, 설치 도구는 서명된 `python.exe`로 실행되는 `.py`로 제공한다.
 
-통합 설치 파일이 하는 일은 다음과 같다.
+통합 설치 파일이 하는 일은 다음과 같다. (**로직 복제 없음** — 아래 개별 스크립트를 `--no-pause`로 순서 실행만 함)
 
-- 현재 Python 인터프리터로 실행 (더블클릭 시 연결된 python)
-- Excel 신뢰 위치에 NAS 등록
-- Windows 로컬 인트라넷에 NAS 등록
-- Excel의 인터넷 차단 보안 설정 완화
-- Chrome 버전 확인 후 ChromeDriver 다운로드 및 PATH 등록
-- 필요한 Python 패키지 설치
+1. `보안경고시 실행.py` — Excel Trusted Location / ZoneMap / 인터넷 콘텐츠 차단 해제 (구 `.REG`와 동일)
+2. `드라이버 자동설치(크롬).py`  
+3. `파이썬 패키지.py` (`requirements.txt`)
+
+개별 파일을 따로 실행해도 동일 동작을 한다.
 
 설치에 포함된 주요 패키지:
 
-- `selenium`
-- `webdriver-manager`
-- `openpyxl`
-- `pandas`
-- `pywin32`
-- `requests`
-- `pywinauto`
-- `pyperclip`
-- `PyPDF2`
-- `pypdf`
-- `tkinterdnd2`
-- `pillow`
+- 목록 파일: `0.처음사용시\requirements.txt` (여기만 수정하면 설치·런처 자동반영)
+- 로더: `0.처음사용시\req_utils.py`
+- 예: `selenium`, `openpyxl`, `pandas`, `pywin32`, `tkinterdnd2`, `pillow` 등
 
 ### 2-3. 설치 관련 보조 파일
 
@@ -82,16 +74,20 @@ Windows 전용인 이유는 다음 기능을 사용하기 때문이다.
 
 | 파일 | 용도 |
 |------|------|
-| `드라이버+파이썬패키지+보안경고 통합설치.py` | 처음 사용하는 PC에서 가장 먼저 실행하는 통합 설치 파일 |
+| `드라이버+파이썬패키지+보안경고 통합설치.py` | 처음 사용하는 PC에서 가장 먼저 실행 (아래 3개를 순서대로 호출만 함) |
+| `보안경고시 실행.py` | Excel/NAS 보안경고 완화 (winreg, 구 `.REG`와 동일 키) |
 | `드라이버 자동설치(크롬).py` | ChromeDriver만 따로 설치할 때 사용 |
 | `파이썬 패키지.py` | Python 패키지만 다시 설치하거나 누락분만 설치할 때 사용 |
-| `보안경고시 실행.REG` | Excel 보안 경고 관련 레지스트리만 따로 적용할 때 사용 |
+| `requirements.txt` | 필수 pip 패키지 목록 (설치 스크립트·런처 공통) |
+| `req_utils.py` | requirements.txt 로더 |
 
 ---
 
 ## 3. 어떤 파일을 실행하면 되는지
 
 **실행 진입점은 하나뿐이다.** NAS 프로그램 폴더에서 **`2.검토 및 입력프로그램.pyw`** 를 더블클릭하면 통합 런처 GUI가 열린다. 원하는 도구 버튼을 누르면 해당 Python GUI가 백그라운드로 실행된다.
+
+런처 시작 시 `0.처음사용시\requirements.txt` 기준으로 패키지를 검사하고, 없으면 안내 창에서 설치 후 재시작한다.
 
 | 런처 버튼 | 실행되는 Python 파일 | 용도 |
 |------|------|------|
@@ -192,23 +188,29 @@ GUI 요약 (`eco_input_gui.py`):
 
 > **V3.4~**: GUI 「그룹웨어 연동」체크박스 없음 — `config.ini` `ENABLED=1`로 기본 전송. `ENABLED=0`으로 OFF.
 
+> **수신 스펙(정본):** `\\192.168.10.163\docker\approval_mvp\docs\ECO_INPUT_MATCHING.md`  
+> 아래 표는 발신(eco_input) 쪽 셀 매핑 요약. 거래처·시설 우선순위·금지사항은 위 문서를 따른다.
+
 **성적서 「입력」 시트 → API 매칭 키**
 
 | 셀 | API 필드 | 용도 |
 |----|----------|------|
-| H7 | `company_name` | 업소명 (원문 + `company_name_norm` 정규화) |
-| E2 | `sems_serial` | 시설 1차 매칭 (SEMS 일련번호) |
-| E4 | `facility_alt` | 시설 2차 매칭 (보조키, **공백 제거** 정규화) |
+| **H6** | `site_no` | 사업장관리번호(마스터 H) — **거래처 매칭 최우선** |
+| H7 | `company_name` | 사업장명(마스터 G 전체). 짧은 이름·의뢰기관(C) 금지 |
+| E4 | `facility_name` | 측정인 시설명(마스터 K) — **시설 1차** |
+| E2 | `sems_stack` (`sems_serial` 병행) | 시설 폴백 (시설명 실패·공란 시) |
 
-※ E1(굴뚝번호)·사업자번호는 **사용/전송 안 함**.  
-※ `facility_name`은 E4(시설명 문자열) 우선. E2가 숫자 코드만이면 `facility_name`은 비우고 `sems_serial`로 매칭.
+※ E1(굴뚝번호) 필드로 보내지 않음. `biz_no`는 보조만(매칭 의존 금지).  
+※ `report_data` / `reports/sync` / `report_pdf` **모두** `site_no`·`facility_name` 전달.
 
 **필수·권장 전송 필드**
 
 | 필드 | 필수 | 출처 / 형식 |
 |------|------|-------------|
 | `sample_no` | ✅ | 시료번호 |
-| `company_name` | ✅ | 입력!H7 |
+| `site_no` | ✅ 권장 | 입력!H6 (=마스터 H) |
+| `company_name` | ✅ | 입력!H7 (=마스터 G 전체) |
+| `facility_name` | ✅ 권장 | 입력!E4 (=마스터 K) |
 | `collected_at` | ✅ | `HH:MM~HH:MM` (기록부 채취시작~끝). meta 없어도 엑셀에서 재읽음. **빈값 재전송 금지** |
 | `collect_start` / `collect_end` | 권장 | 채취 시작·끝 시분 |
 | `measure_date` | ✅ | `YYYY-MM-DD` (기록부 날짜, 없으면 시료번호 YYMMDD) |
@@ -222,7 +224,9 @@ GUI 요약 (`eco_input_gui.py`):
 |------|------|------|
 | `item_name` | 입력(분석값) B열 | 항목명 |
 | `concentration` | 입력(분석값) `농도`/`측정농도` | 탭4 사이트 농도와 동일 계열 |
-| `unit` | 대기측정기록부 **F열** | B열 항목명 매칭. 입력(분석값)에 단위 열 없음. 비산은 상단행(예: B19/F19 `mg/S㎥`)도 읽음 |
+| `standard` | 입력(분석값) **H열** (`기준치`/`배출허용기준`/`배출허용기준농도`) | 배출허용기준농도. 별칭 permit_limit 등. 헤더 없으면 H열 |
+| `standard_unit` | 대기측정기록부 **F열** | 배출허용기준 단위. B열 항목명 매칭. 비산은 상단행도 읽음 |
+| `unit` | 대기측정기록부 **I열** | 농도 단위. B열 항목명 매칭. 입력(분석값)에 단위 열 있으면 그쪽 우선. 비산은 상단행도 읽음 |
 | `stack` | 입력(분석값) 배출구열 | 있으면 |
 | `flow_rate` | 대기측정기록부 J14 또는 N14 | `공기비적용`에 **「적용」포함·「미적용」아님** → N14(보정후), 그 외 → J14. `적용`/`적용1`/`적용2` 모두 보정후. **비산은 유량 비어 있음(정상)** |
 
@@ -262,7 +266,9 @@ GUI 요약 (`eco_input_gui.py`):
 - 실행·에러 통합 로그: 프로그램루트 `4.log\{YYYY}년\{M}월\{YYYYMMDD_HHMMSS}_{프로그램}.log`  
   (구 `_logs\error_log.txt` 폐기 — 예외도 여기. 세션 없으면 `YYYYMMDD_error.log`)
 
-**상세 스펙**: `그룹웨어_연동_시설매칭_스펙.md`
+**상세 스펙**
+- **수신 정본:** `\\192.168.10.163\docker\approval_mvp\docs\ECO_INPUT_MATCHING.md`
+- 발신 보조: `그룹웨어_연동_시설매칭_스펙.md`
 
 수정 시 같이 볼 파일: `eco_input.py`, `eco_input_gui.py`, `config.py`, `groupware_client.py`, `measin_utils.py`, `log_utils.py`
 
@@ -343,7 +349,7 @@ PDF 생성·업로드 순서 (`make_tab4_pdfs_water` → `upload_tab4_pdfs`):
 - `eco_input_gui.py` — `_build_answers_water()`
 - `config.ini` / `config.py` — 아래 PATHS·URLS 수질 키
 
-### 4-1-2. 대기 탭1 인력·차량·장비 (슬래시 정규화)
+### 4-1-2. 대기 탭1 인력·차량·장비·측정시설 (슬래시 정규화 / E4)
 
 성적서 **입력** 시트에 `이름 / 팀 / 직급`처럼 슬래시로 구분된 문자열이 있어도, **자동입력·검토가 같은 규칙**으로 잘라서 사이트·비교에 쓴다. (`format_utils.py` → `excel_utils.parse_measuring_record` → `eco_input.fill_tab1` / `eco_check.compare_list`)
 
@@ -355,9 +361,19 @@ PDF 생성·업로드 순서 (`make_tab4_pdfs_water` → `upload_tab4_pdfs`):
 
 예: `81 주 6787` → `81주6787`, `대기 배출 가스측정기5 / …` → `대기배출가스측정기5`
 
-**측정인 검토**에서는 사이트·엑셀 **양쪽**을 위 규칙으로 맞춘 뒤 목록(set) 비교한다. 사이트에 `그랜드 스타렉스 / 81주6787`처럼 긴 표기가 남아 있어도 엑셀 `81주6787`과 일치로 본다.
+**측정시설** (탭1 `#edit_emis_fac_no` Select2):
 
-수정 시 같이 볼 파일: `format_utils.py`, `excel_utils.py`, `eco_input.py` (`fill_tab1`), `eco_check.py` (`compare_list`)
+| 구분 | 엑셀 | 사이트 | 비고 |
+|------|------|--------|------|
+| 측정인 시설명 | 입력!E4 | 드롭다운 표시 텍스트 (예: `1.건조50`) | `set_emis_fac_from_excel` — 정확/포함 매칭, change 트리거 |
+
+탭1 입력 순서: 측정용도(F10) → 측정항목 → 인력 → 차량 → 장비 → **측정시설(E4)** → (선택 후 약 0.8초 대기) → 저장.
+
+탭2 참고: 기상=`select.meas_wthr` (`set_weather`), 표준산소농도=`#basis_o2c` Select2 (`set_basis_o2c`).
+
+**측정인 검토**에서는 사이트·엑셀 **양쪽**을 위 규칙으로 맞춘 뒤 목록(set) 비교한다. 사이트에 `그랜드 스타렉스 / 81주6787`처럼 긴 표기가 남아 있어도 엑셀 `81주6787`과 일치로 본다. 측정시설은 `facility_labels_match`(공백 무시·상호 포함)로 비교한다.
+
+수정 시 같이 볼 파일: `format_utils.py`, `excel_utils.py`, `measin_constants.py` (`SEL_EMIS_FAC`), `eco_input.py` (`fill_tab1`), `eco_check.py` (`compare_list` / 측정시설)
 
 ### 4-2. 측정인 검토
 
@@ -375,7 +391,12 @@ PDF 생성·업로드 순서 (`make_tab4_pdfs_water` → `upload_tab4_pdfs`):
 
 - **세션 복구**: 상세 진입·데이터 읽기 중 로그인 세션 만료 시 확인창 처리 후 재로그인·날짜 검색 복구, 해당 시료부터 이어서 재시도 (`measin_utils.open_detail_with_session_recovery`)
 - **측정목적 검증**: 상세페이지 탭1의 측정목적(자가측정용/참고용)과 엑셀 '입력' 시트 F10 셀의 값(1/2)이 일치하는지 자동으로 확인 (시료번호 일치 여부와 함께 출력)
+- **측정시설 검증**: 탭1 `#edit_emis_fac_no` 선택값 ↔ 입력!E4 (`측정시설` 항목)
 - **탭1 인력·차량·장비**: 자동입력과 동일한 슬래시·공백 정규화 후 비교 (`readme.md` **§4-1-2**)
+- **현장사진**: 탭3 `#photo0~2` 저장·유무 비교(`현장사진1~3`). 요약 시트에는 **해당 팀 시료만**, 각 시료 **PDF 열기 바로 아래**에 미리보기
+- **PDF/사진 저장 경로** (시료번호 날짜 기준 연·월 폴더):
+  - PDF: `...\3.측정인 검토\PDF\{연도}\{N월}\{시료번호}.pdf`
+  - 현장사진: `...\3.측정인 검토\현장사진\{연도}\{N월}\{시료번호}_PIC1~3.png`
 - **하드코딩 제거**: 모든 NAS 경로가 `config.ini`를 통해 중앙 관리되도록 개선
 
 ### 4-3. 발송대장 검토
@@ -419,6 +440,8 @@ PDF 생성·업로드 순서 (`make_tab4_pdfs_water` → `upload_tab4_pdfs`):
 최근 반영된 동작:
 
 - **결과 엑셀 오토핏**: 대시보드·상세·원인집계 시트의 사용 열 전체(`A`~`max_column`) 너비 자동 조정
+- **현장사진 유무**: eco_check 요약의 `현장사진1~3`을 읽어 시료별 `현장사진상태`(OK/NG/확인불가). NG면 검토·최종 종합에 반영. 대시보드·원인집계에 건수/표 추가
+- **미리보기 행 제외**: `PDF 열기`·`현장사진`·`PIC*` 라벨 행·구버전 하단 갤러리 구간은 집계에서 제외
 
 ### 4-5. 성적서 검토
 
@@ -780,7 +803,9 @@ PDF 생성, 표시값 복사, 백데이터 생성이 대표적이다.
 - `BASE_URL` — 예: `http://192.168.10.163:8081`
 - `API_TOKEN` — 그룹웨어 `.env`의 `GROUPWARE_API_TOKEN` 과 동일
 
-그다음 참고: `3.py/groupware_client.py`, `3.py/config.py`, `그룹웨어_연동_시설매칭_스펙.md`
+그다음 참고: `3.py/groupware_client.py`, `3.py/config.py`,  
+**수신 정본** `\\192.168.10.163\docker\approval_mvp\docs\ECO_INPUT_MATCHING.md`,  
+발신 보조 `그룹웨어_연동_시설매칭_스펙.md`
 
 ### 측정인.kr 사이트 구조가 바뀌었을 때
 
@@ -813,7 +838,9 @@ PDF 생성, 표시값 복사, 백데이터 생성이 대표적이다.
 |------|------|
 | `readme.md` | 처음 사용하는 사람을 위한 전체 안내 |
 | `파일별_설명.md` | 개발자/유지보수 담당자를 위한 파일별 상세 설명 |
-| `그룹웨어_연동_시설매칭_스펙.md` | 사내 그룹웨어 API·시설 매칭(E2/E4) 연동 스펙 |
+| `\\192.168.10.163\docker\approval_mvp\docs\ECO_INPUT_MATCHING.md` | **그룹웨어 수신 정본** (거래처·시설 매칭·measurements) |
+| `그룹웨어_연동_시설매칭_스펙.md` | 발신(eco_input) 셀 매핑 보조 — 수신 정본을 따름 |
+| `SITE_NO_연동안내.md` | 사업장관리번호(H6→site_no) 안내 |
 | `모듈화_분석.md` | 리팩터링 및 모듈화 작업 기록 |
 | `버전노트.txt` | 버전별 변경 이력 (도구별·런처별) |
 
@@ -844,4 +871,4 @@ PDF 생성, 표시값 복사, 백데이터 생성이 대표적이다.
 - 백데이터는 측정 종료 전이면 일부러 생성되지 않음
 - 발송대장 검토의 수분/THC는 **샘플 형태가 아니라 성적서↔백데이터 내용 정합**으로 본다 (`내용불일치`)
 - **그룹웨어 연동**은 **대기·탭4 PDF·입력완료** 후만. `config.ini` `[GROUPWARE] ENABLED=1` (GUI 체크박스 없음, OFF 시 `ENABLED=0`)
-- 수질은 그룹웨어 미연동. 시설 매칭 키는 입력 시트 **H7, E2, E4** (E1·사업자번호 없음)
+- 수질은 그룹웨어 미연동. 매칭 키: **H6=`site_no`**, H7=`company_name`, E4=`facility_name`, E2=`sems_stack` (수신 정본 `ECO_INPUT_MATCHING.md`)

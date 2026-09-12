@@ -192,9 +192,12 @@ def bind_text_mousewheel(text_widget, *widgets):
         w.bind("<MouseWheel>", _on_mousewheel)
 
 
-def create_scrollable_text(parent, *, width=40, height=3, **text_kwargs):
+def create_scrollable_text(
+    parent, *, width=40, height=3, horizontal: bool = False, **text_kwargs
+):
     """
     여러 줄 입력용 Text + 세로 스크롤바.
+    horizontal=True 이면 가로 스크롤바도 추가 (긴 경로 표시용).
 
     Returns:
         (frame, text_widget)
@@ -216,12 +219,23 @@ def create_scrollable_text(parent, *, width=40, height=3, **text_kwargs):
     )
     opts.update(text_kwargs)
 
-    scrollbar = ttk.Scrollbar(frame, orient="vertical")
-    text = tk.Text(frame, yscrollcommand=scrollbar.set, **opts)
-    scrollbar.config(command=text.yview)
+    yscroll = ttk.Scrollbar(frame, orient="vertical")
+    text_kw = dict(opts)
+    text_kw["yscrollcommand"] = yscroll.set
+    xscroll = None
+    if horizontal:
+        xscroll = ttk.Scrollbar(frame, orient="horizontal")
+        text_kw["xscrollcommand"] = xscroll.set
+
+    text = tk.Text(frame, **text_kw)
+    yscroll.config(command=text.yview)
+    if xscroll is not None:
+        xscroll.config(command=text.xview)
 
     text.grid(row=0, column=0, sticky="nsew")
-    scrollbar.grid(row=0, column=1, sticky="ns")
+    yscroll.grid(row=0, column=1, sticky="ns")
+    if xscroll is not None:
+        xscroll.grid(row=1, column=0, sticky="ew")
     bind_text_mousewheel(text, frame)
 
     return frame, text

@@ -233,84 +233,105 @@ def _is_tab4_success_status(status: str, success_text: str = TAB4_LIST_SUCCESS_S
 
 def _read_list_row_status(driver, sample_no: str) -> str | None:
     """
-    목록 RealGrid: 시료번호 행 → 그 행에서 시료번호 열 + 2칸(상태).
-    셀 값은 td 안의 .rg-renderer 텍스트 우선
-    (예: <div class="rg-renderer">측정분석결과 입력완료</div>).
-    """
+    목록 RealGrid: 시료번호와 일치하는 .rg-renderer(상세 진입 더블클릭과 동일)를 찾고,
+    같은 행에서 시료번호 열 + 2칸(상태) 텍스트를 읽음.
+  """
+    xp = (
+        f"//div[contains(@class,'rg-renderer') and normalize-space()='{sample_no}']"
+    )
+    try:
+        renderers = driver.find_elements(By.XPATH, xp)
+    except Exception:
+        renderers = []
+
+    sample_ren = None
+    for ren in renderers:
+        try:
+            td = ren.find_element(By.XPATH, "./ancestor::td[1]")
+            tr = td.find_element(By.XPATH, "./ancestor::tbody/tr[1]")
+            root = ren.find_element(By.XPATH, "./ancestor::div[contains(@class,'rg-root')][1]")
+            if td and tr and root:
+                sample_ren = ren
+                break
+        except Exception:
+            continue
+
+    if sample_ren is None:
+        return None
+
     js = r"""
-    const sampleNo = arguments[0];
+    const ren = arguments[0];
     const statusOff = arguments[1];
-    // RealGrid 셀: .rg-renderer 가 실제 표시 문구
+    const sampleNo = arguments[2];
+
     const cellText = (td) => {
       if (!td) return "";
-      const ren = td.querySelector(".rg-renderer");
-      const raw = ren
-        ? (ren.innerText || ren.textContent || "")
+      const r = td.querySelector(".rg-renderer");
+      const raw = r
+        ? (r.innerText || r.textContent || "")
         : (td.innerText || td.textContent || "");
       return (raw + "").replace(/\s+/g, " ").trim();
     };
-    const headText = (el) => ((el && (el.innerText || el.textContent)) || "")
-      .replace(/\*/g, "").replace(/\s+/g, " ").trim();
 
-    const roots = Array.from(document.querySelectorAll(".rg-root"));
-    for (const root of roots) {
-      const headTables = Array.from(root.querySelectorAll(
-        ".rg-fixed-header table, .rg-scroll-header table, .rg-header table, .rg-head table"
-      ));
-      const seenHead = new Set();
-      const heads = [];
-      for (const t of headTables) {
-        if (seenHead.has(t)) continue;
-        seenHead.add(t);
-        heads.push(t);
-      }
-      if (!heads.length) continue;
+    const sampleTd = ren.closest("td");
+    const sampleTr = sampleTd && sampleTd.closest("tbody tr");
+    const tbody = sampleTr && sampleTr.closest("tbody");
+    const root = sampleTd && sampleTd.closest(".rg-root");
+    if (!sampleTr || !tbody || !root) return null;
 
-      const headers = [];
-      for (const tbl of heads) {
-        const row = tbl.querySelector("thead tr:last-child") || tbl.querySelector("tr:last-child");
-        if (!row) continue;
-        for (const c of row.querySelectorAll("th, td")) headers.push(headText(c));
-      }
-      if (!headers.length) continue;
+    const rowIndex = Array.prototype.indexOf.call(
+      tbody.querySelectorAll("tr"), sampleTr
+    );
+    if (rowIndex < 0) return null;
 
-      let cSample = headers.findIndex(h => h === "시료번호" || h === "시료 번호");
-      if (cSample < 0) cSample = headers.findIndex(h => h && h.indexOf("시료번호") >= 0);
-      if (cSample < 0) continue;
-      const cStatus = cSample + statusOff;
-
-      const bodyTables = Array.from(root.querySelectorAll(
-        ".rg-fixed-body table, .rg-scroll-body table, .rg-body table"
-      ));
-      const seenBody = new Set();
-      const bodies = [];
-      for (const t of bodyTables) {
-        if (seenBody.has(t)) continue;
-        seenBody.add(t);
-        bodies.push(t);
-      }
-      if (!bodies.length) continue;
-
-      const maxRows = Math.max(0, ...bodies.map(t => t.querySelectorAll("tbody tr").length));
-      for (let ri = 0; ri < maxRows; ri++) {
-        const texts = [];
-        for (const tbl of bodies) {
-          const tr = tbl.querySelectorAll("tbody tr")[ri];
-          if (!tr) continue;
-          for (const td of tr.querySelectorAll("td")) texts.push(cellText(td));
-        }
-        if (cSample >= texts.length) continue;
-        if (texts[cSample] !== sampleNo) continue;
-        if (cStatus >= texts.length) return "";
-        return texts[cStatus] || "";
-      }
+    const bodyTables = Array.from(root.querySelectorAll(
+      ".rg-fixed-body table, .rg-scroll-body table, .rg-body table"
+    ));
+    const seen = new Set();
+    const rowCells = [];
+    for (const tbl of bodyTables) {
+      if (seen.has(tbl)) continue;
+      seen.add(tbl);
+      const rows = tbl.querySelectorAll("tbody tr");
+      if (rowIndex >= rows.length) continue;
+      const tr = rows[rowIndex];
+      for (const td of tr.querySelectorAll("td")) rowCells.push(cellText(td));
     }
-    return null;
+
+    const cSample = rowCells.findIndex((t) => t === sampleNo);
+    if (cSample < 0) return null;
+    const cStatus = cSample + statusOff;
+    if (cStatus >= rowCells.length) return "";
+    return rowCells[cStatus] || "";
     """
     try:
-        return driver.execute_script(js, sample_no, int(TAB4_LIST_STATUS_OFFSET))
+        return driver.execute_script(
+            js, sample_ren, int(TAB4_LIST_STATUS_OFFSET), sample_no
+        )
     except Exception:
         return None
+
+
+def _search_sample_on_list(
+    driver,
+    sample_no: str,
+    search_box: str = "#search_meas_mgmt_no",
+) -> bool:
+    """목록 화면에서 시료번호 검색 (open_sample_detail과 동일 타이밍)."""
+    try:
+        inp = driver.find_element(By.CSS_SELECTOR, search_box)
+        try:
+            inp.clear()
+        except Exception:
+            driver.execute_script("arguments[0].value='';", inp)
+        inp.send_keys(sample_no)
+        time.sleep(0.3)
+        safe_click(driver, "#btnSearch")
+        time.sleep(1.5)
+        wait_grid_loaded(driver, timeout=8, warn_msg="⚠ 목록 RealGrid 재검색 대기")
+        return True
+    except Exception:
+        return False
 
 
 def verify_tab4_list_status(
@@ -339,30 +360,20 @@ def verify_tab4_list_status(
     status = None
     for _ in range(3):
         status = _read_list_row_status(driver, sample_no)
-        if status is not None and str(status).strip() != "":
+        if status is not None:
             break
         time.sleep(0.8)
 
     # 현재 목록에 없으면(페이지/필터 등) 그때만 시료번호 재검색
     if status is None:
-        try:
-            inp = driver.find_element(By.CSS_SELECTOR, search_box)
-            try:
-                inp.clear()
-            except Exception:
-                driver.execute_script("arguments[0].value='';", inp)
-            inp.send_keys(sample_no)
-            time.sleep(0.2)
-            safe_click(driver, "#btnSearch")
-            time.sleep(1.2)
-            wait_grid_loaded(driver, timeout=8, warn_msg="⚠ 목록 RealGrid 재검색 대기")
-            for _ in range(2):
+        if _search_sample_on_list(driver, sample_no, search_box):
+            for _ in range(3):
                 status = _read_list_row_status(driver, sample_no)
-                if status is not None and str(status).strip() != "":
+                if status is not None:
                     break
                 time.sleep(0.8)
-        except Exception as e:
-            return "확인불가", f"(재검색 실패: {e})"
+        else:
+            return "확인불가", "(재검색 실패)"
 
     if status is None:
         return "확인불가", "(시료번호 행을 못 찾음)"
@@ -607,6 +618,8 @@ def go_back_to_list(driver,
         btn_selectors = [
             "#btnMsFieldDocCancel",                                  # eco_input 기본
             "#btnGoList",                                            # eco_input 탭4
+            "#updateFieldPlanForm > div:nth-child(19) > div > div > button.btn.btnCancel",  # 탭1만
+            "#updateFieldPlanForm button.btn.btnCancel",             # 탭1 폼 취소 fallback
             "#t3 > div:nth-child(2) > div > button.btn.btnCancel",  # eco_check 스타일
         ]
 

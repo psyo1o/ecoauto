@@ -4,7 +4,7 @@ PDF 생성 & 병합 통합
 """
 
 import os
-from excel_com_utils import get_excel_app
+from excel_com_utils import get_excel_app, ungroup_excel_sheets
 
 def merge_pdfs(pdf_list: list, output_pdf_path: str) -> bool:
     """여러 PDF 파일을 하나로 병합"""
@@ -42,6 +42,7 @@ class PDFExporter:
         # ✅ 전역 엑셀 앱을 가져오고 워크북을 엽니다.
         self.excel = get_excel_app()
         self.wb = self.excel.Workbooks.Open(excel_path, ReadOnly=True, UpdateLinks=0)
+        ungroup_excel_sheets(self.wb)
     
     def export_sheet(self, sheet_name: str, output_pdf_path: str) -> bool:
         """단일 시트를 PDF로 내보내기"""
@@ -61,6 +62,12 @@ class PDFExporter:
             pass
         
         try:
+            # 그룹 선택이면 이 시트만 선택 후 내보내기 (아니면 여러 시트가 한 PDF로 나감)
+            ungroup_excel_sheets(self.wb, sheet)
+            try:
+                sheet.Select(True)
+            except Exception:
+                pass
             # 0 = xlTypePDF
             sheet.ExportAsFixedFormat(0, output_pdf_path)
             return os.path.isfile(output_pdf_path)
