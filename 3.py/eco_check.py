@@ -32,6 +32,7 @@ from format_utils import (
     to_float2,
     parse_datetime_text,
     normalize_tab1_select_field,
+    facility_labels_match,
 )
 from data_utils import norm_ymd, sample_to_datestr, clean_leading_mark
 from excel_utils import find_sheet_by_candidates as _find_sheet_by_candidates_openpyxl
@@ -42,6 +43,7 @@ from measin_utils import (
     open_detail_with_session_recovery, recover_site_session, is_field_list_ready,
     ensure_detail_page_for_tab1, reopen_sample_from_search,
     ensure_logged_in_or_recover, is_logged_out,
+    verify_tab4_list_status,
     MAX_SAMPLE_DETAIL_RETRY,
     LOGIN_URL, FIELD_URL, NAS_BASE, NAS_DIRS
 )
@@ -49,11 +51,11 @@ from excel_utils import find_sheet_by_candidates, parse_measuring_record, autofi
 from realgrid_utils import rg_api_read_data
 from log_utils import log_error
 from cancel_utils import is_cancelled
-from config import MEASIN_REVIEW, MEASIN_PDF_DIR
+from config import MEASIN_REVIEW, MEASIN_PDF_DIR, MEASIN_PHOTO_DIR
 from measin_constants import (
     SKIP_VOL_AND_SPEED, SKIP_SPEED_ONLY, DUST_SKIP_FIELDS,
     SM3_ITEMS as sm3_items,
-    SEL_DATE, SEL_START_TIME, SEL_END_TIME,
+    SEL_DATE, SEL_START_TIME, SEL_END_TIME, SEL_WEATHER, SEL_EMIS_FAC,
     SEL_O2_STD, SEL_O2_MEAS, SEL_GAS_VOL_PRE, SEL_GAS_VOL_POST,
     SEL_MOISTURE, SEL_GAS_TEMP, SEL_GAS_SPEED
 )
@@ -62,13 +64,46 @@ from measin_constants import (
 # 설정
 # ------------------------------------------------------------
 
-
+# 구버전 호환(루트). 실제 저장은 sample별 연/월 폴더 사용.
 PDF_DIR = MEASIN_PDF_DIR
+PHOTO_DIR = MEASIN_PHOTO_DIR
 if not os.path.isdir(PDF_DIR):
     os.makedirs(PDF_DIR)
+if not os.path.isdir(PHOTO_DIR):
+    os.makedirs(PHOTO_DIR)
 
 PDF_MAP = {}
+PHOTO_MAP = {}  # sample_no -> [{"idx", "path", "shot_at"}, ...]
 COMPANY_MAP = {}   # ★ 추가: 시료번호 -> 업소명(표시용)
+
+# 목록 RealGrid '상태' 열 기대값 (탭1·2·3 자료수집 후 목록 복귀 시 확인)
+CHECK_LIST_EXPECTED_STATUS = "측정분석결과 입력중"
+
+
+def _ym_folder_from_sample(sample_no: str) -> tuple[str, str]:
+    """시료번호 → (연도, 'N월'). 예: A2601164 → ('2026', '1월')."""
+    ds = sample_to_datestr(str(sample_no or "").strip())
+    if ds:
+        try:
+            yyyy, mm, _dd = ds.split("-")
+            return yyyy, f"{int(mm)}월"
+        except Exception:
+            pass
+    now = datetime.now()
+    return str(now.year), f"{now.month}월"
+
+
+def media_dir_for_sample(kind: str, sample_no: str) -> str:
+    """
+    PDF/현장사진 저장 폴더.
+    예: ...\\3.측정인 검토\\PDF\\2026\\9월
+         ...\\3.측정인 검토\\현장사진\\2026\\9월
+    """
+    yyyy, mlabel = _ym_folder_from_sample(sample_no)
+    base = PDF_DIR if kind == "PDF" else PHOTO_DIR
+    path = os.path.join(base, yyyy, mlabel)
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
 # ============================================================
@@ -84,7 +119,7 @@ def init_driver():
     """eco_check 전용 드라이버 초기화 (PDF 다운로드 경로 설정 포함)"""
     from selenium_utils import init_driver as _base_init
     d = _base_init()
-    # PDF 다운로드 경로를 CDP로 설정
+    # 초기 다운로드 경로(시료별로는 download_pdf에서 재설정)
     try:
         d.execute_cdp_cmd(
             "Page.setDownloadBehavior",
@@ -134,11 +169,13 @@ def _wait_new_pdf(download_dir, before_set, timeout=60):
 def download_pdf(driver, sample_no):
     """
     PDF 다운로드 버튼 클릭 후
-    '이번 클릭으로 새로 생성된 PDF'만 잡아서 sample_no.pdf로 저장
+    '이번 클릭으로 새로 생성된 PDF'만 잡아서
+    ...\\3.측정인 검토\\PDF\\{연도}\\{월}\\{sample_no}.pdf 로 저장
     """
     print(f"   [PDF] 다운로드 시도: {sample_no}")
 
-    target_path = os.path.join(PDF_DIR, f"{sample_no}.pdf")
+    out_dir = media_dir_for_sample("PDF", sample_no)
+    target_path = os.path.join(out_dir, f"{sample_no}.pdf")
     pdf_btn_sel = "#fileArea > section > div > div.row.fr > input:nth-child(3)"
 
     if os.path.isfile(target_path):
@@ -148,7 +185,15 @@ def download_pdf(driver, sample_no):
             pass
 
     try:
-        before = set(os.listdir(PDF_DIR))
+        driver.execute_cdp_cmd(
+            "Page.setDownloadBehavior",
+            {"behavior": "allow", "downloadPath": out_dir},
+        )
+    except Exception as e:
+        print(f"   ⚠ 다운로드 경로 설정 실패: {e}")
+
+    try:
+        before = set(os.listdir(out_dir))
     except Exception as e:
         print(f"   ❌ PDF_DIR 접근 실패: {e}")
         return ""
@@ -157,7 +202,7 @@ def download_pdf(driver, sample_no):
         print("   ❌ PDF 버튼 클릭 실패")
         return ""
 
-    new_pdf = _wait_new_pdf(PDF_DIR, before, timeout=60)
+    new_pdf = _wait_new_pdf(out_dir, before, timeout=60)
     if not new_pdf or not os.path.isfile(new_pdf):
         print("   ❌ PDF 다운로드 완료/파일 탐지 실패")
         return ""
@@ -170,6 +215,132 @@ def download_pdf(driver, sample_no):
     except Exception as e:
         print(f"   ❌ PDF 이름 변경 실패: {e}")
         return new_pdf
+
+
+# ------------------------------------------------------------
+# 탭3 현장사진 저장 (#photo0~2)
+# ------------------------------------------------------------
+def _img_element_to_png_bytes(driver, img_el) -> bytes:
+    """이미 로드된 <img>를 canvas로 PNG 바이트 추출."""
+    try:
+        data_url = driver.execute_script(
+            """
+            var img = arguments[0];
+            if (!img) return '';
+            if (!img.complete || !img.naturalWidth) return '';
+            var c = document.createElement('canvas');
+            c.width = img.naturalWidth;
+            c.height = img.naturalHeight;
+            var ctx = c.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            return c.toDataURL('image/png');
+            """,
+            img_el,
+        )
+        if not data_url or not str(data_url).startswith("data:image"):
+            return b""
+        import base64
+        b64 = str(data_url).split(",", 1)[1]
+        return base64.b64decode(b64)
+    except Exception:
+        return b""
+
+
+def _download_url_with_driver_cookies(driver, url: str) -> bytes:
+    """Selenium 쿠키로 상대/절대 URL 다운로드 (requests 없을 때 urllib)."""
+    try:
+        from urllib.parse import urljoin, urlparse
+        from urllib.request import Request, build_opener, HTTPCookieProcessor
+        from http.cookiejar import CookieJar
+
+        if not url:
+            return b""
+        if url.startswith("/"):
+            parsed = urlparse(driver.current_url)
+            url = f"{parsed.scheme}://{parsed.netloc}{url}"
+
+        jar = CookieJar()
+        opener = build_opener(HTTPCookieProcessor(jar))
+        # CookieJar에 selenium 쿠키 주입은 번거로워 header로 직접
+        cookie_hdr = "; ".join(
+            f"{c['name']}={c['value']}" for c in driver.get_cookies()
+        )
+        req = Request(url, headers={"Cookie": cookie_hdr, "User-Agent": "Mozilla/5.0"})
+        with opener.open(req, timeout=30) as resp:
+            return resp.read()
+    except Exception:
+        return b""
+
+
+def download_field_photos(driver, sample_no: str, shot_times: list | None = None) -> list[dict]:
+    """
+    탭3 #photo0~#photo2 저장.
+    경로: ...\\3.측정인 검토\\현장사진\\{연도}\\{월}\\{sample_no}_PIC1.png ...
+    반환: [{"idx":1, "path":..., "shot_at":...}, ...]
+    """
+    print(f"   [현장사진] 저장 시도: {sample_no}")
+    out_dir = media_dir_for_sample("현장사진", sample_no)
+
+    times = list(shot_times or [])
+    out: list[dict] = []
+    for i in range(3):
+        pic_no = i + 1
+        shot_at = times[i] if i < len(times) else ""
+        item = {"idx": pic_no, "path": "", "shot_at": shot_at, "src": ""}
+        try:
+            img = driver.find_element(By.CSS_SELECTOR, f"#photo{i}")
+            try:
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center'});", img
+                )
+            except Exception:
+                pass
+            for _ in range(15):
+                ready = driver.execute_script(
+                    "return !!(arguments[0].complete && arguments[0].naturalWidth > 0);",
+                    img,
+                )
+                if ready:
+                    break
+                time.sleep(0.2)
+
+            src = (img.get_attribute("src") or "").strip()
+            item["src"] = src
+            if not src:
+                print(f"   ⚠ photo{i}: src 없음")
+                out.append(item)
+                continue
+
+            raw = _img_element_to_png_bytes(driver, img)
+            ext = ".png"
+            if not raw:
+                raw = _download_url_with_driver_cookies(driver, src)
+                from urllib.parse import urlparse
+                path_ext = os.path.splitext(urlparse(src).path)[1]
+                if path_ext.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+                    ext = path_ext.lower()
+                    if ext == ".jpeg":
+                        ext = ".jpg"
+
+            if not raw:
+                print(f"   ⚠ photo{i}: 다운로드 실패")
+                out.append(item)
+                continue
+
+            target = os.path.join(out_dir, f"{sample_no}_PIC{pic_no}{ext}")
+            if os.path.isfile(target):
+                try:
+                    os.remove(target)
+                except Exception:
+                    pass
+            with open(target, "wb") as f:
+                f.write(raw)
+            item["path"] = target
+            print(f"   ✔ 현장사진 저장: {target}" + (f" ({shot_at})" if shot_at else ""))
+        except Exception as e:
+            print(f"   ⚠ photo{i} 처리 실패: {e}")
+        out.append(item)
+    return out
 
 
 # ------------------------------------------------------------
@@ -212,6 +383,27 @@ def click_tab(driver, tab_id) -> bool:
     except Exception:
         print(" ❌ 탭 전환 실패:", tab_id)
         return False
+
+
+def get_weather_text(driver):
+    """기상 select.meas_wthr 선택값 텍스트."""
+    try:
+        s = driver.find_element(By.CSS_SELECTOR, SEL_WEATHER)
+        v = (s.get_attribute("value") or "").strip()
+        if not v:
+            return ""
+        try:
+            op = s.find_element(By.CSS_SELECTOR, f"option[value='{v}']")
+            return (op.text or v).strip()
+        except Exception:
+            return v
+    except Exception:
+        # 구형 input 호환
+        return gv(
+            driver,
+            "#idWHArea > div > div:nth-child(2) > fieldset > label.col.col-12 "
+            "> table > tbody > tr > td:nth-child(1) > input",
+        )
 
 
 def get_wind_direction_text(driver):
@@ -355,6 +547,60 @@ def relax_env_input_time_by_company(sample_rows_map: dict, excel_meta_map: dict)
                 r["사이트만존재"] = ""
 
 
+def relax_env_input_time_by_env_psic(sample_rows_map: dict, excel_meta_map: dict):
+    """
+    동일 날짜 + 동일 환경기술인(탭3 field_officer_name) 케이스에서
+    환경기술인 입력일시가 '해당 시료' 채취시간을 벗어나도
+    같은 환경기술인의 다른 시료 채취시간 범위 안이면 OK로 완화한다.
+    """
+    from collections import defaultdict
+
+    windows = defaultdict(list)  # (date, psic_name) -> [(start_dt, end_dt), ...]
+
+    for sn, meta in (excel_meta_map or {}).items():
+        if not isinstance(meta, dict):
+            continue
+        date = (meta.get("날짜") or "").strip()
+        psic = (meta.get("환경기술인") or "").strip()
+        st = _pd(meta.get("측정시작DT", ""))
+        ed = _pd(meta.get("측정종료DT", ""))
+        if date and psic and st and ed:
+            windows[(date, psic)].append((st, ed))
+
+    if not windows:
+        return
+
+    for sn, rows in (sample_rows_map or {}).items():
+        meta = (excel_meta_map or {}).get(sn, {})
+        if not isinstance(meta, dict):
+            continue
+
+        date = (meta.get("날짜") or "").strip()
+        psic = (meta.get("환경기술인") or "").strip()
+        if not date or not psic:
+            continue
+
+        key = (date, psic)
+        if key not in windows:
+            continue
+
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            if r.get("항목") != "환경기술인입력일시":
+                continue
+            if r.get("비교") != "NG":
+                continue
+
+            dt = _pd(r.get("사이트값", ""))
+            if not dt:
+                continue
+
+            if any(st <= dt <= ed for st, ed in windows[key]):
+                r["비교"] = "OK"
+                r["사이트만존재"] = ""
+
+
 def _collect_tab1_data(driver, data: dict):
     if not click_tab(driver, "ui-id-1"):
         return
@@ -412,17 +658,40 @@ def _collect_tab1_data(driver, data: dict):
     except Exception:
         data["측정목적"] = ""
 
+    # 측정시설 (Select2 #edit_emis_fac_no) — 표시 텍스트 우선
+    try:
+        fac_txt = ""
+        try:
+            fac_txt = driver.find_element(
+                By.CSS_SELECTOR, "#select2-edit_emis_fac_no-container"
+            ).get_attribute("title") or ""
+            fac_txt = (fac_txt or "").strip()
+            if not fac_txt:
+                fac_txt = driver.find_element(
+                    By.CSS_SELECTOR, "#select2-edit_emis_fac_no-container"
+                ).text.strip()
+        except Exception:
+            fac_txt = ""
+        if not fac_txt:
+            sel_el = driver.find_element(By.CSS_SELECTOR, SEL_EMIS_FAC)
+            fac_txt = driver.execute_script(
+                """
+                var sel = arguments[0];
+                if (!sel || sel.selectedIndex < 0) return '';
+                return (sel.options[sel.selectedIndex].text || '').trim();
+                """,
+                sel_el,
+            ) or ""
+        data["측정시설"] = str(fac_txt).strip()
+    except Exception:
+        data["측정시설"] = ""
 
 def _collect_tab2_data(driver, data: dict):
     if not click_tab(driver, "ui-id-2"):
         return
     time.sleep(1)
     data["날짜"] = norm_ymd(gv(driver, SEL_DATE))
-    data["기상"] = gv(
-        driver,
-        "#idWHArea > div > div:nth-child(2) > fieldset > label.col.col-12 "
-        "> table > tbody > tr > td:nth-child(1) > input",
-    )
+    data["기상"] = get_weather_text(driver)
     data["기온"] = gv(
         driver,
         "#idWHArea > div > div:nth-child(2) > fieldset > label.col.col-12 "
@@ -457,7 +726,7 @@ def _collect_tab2_data(driver, data: dict):
     data["배출가스유속"] = to_float2(gv(driver, SEL_GAS_SPEED))
 
 
-def _collect_tab3_data(driver, data: dict) -> bool:
+def _collect_tab3_data(driver, data: dict, sample_no: str = "") -> bool:
     if not click_tab(driver, "ui-id-3"):
         return False
     time.sleep(2)
@@ -465,6 +734,20 @@ def _collect_tab3_data(driver, data: dict) -> bool:
     data["환경기술인입력일시"] = mob["환경기술인입력일시"]
     data["GPS위치확인일시"] = mob["GPS위치확인일시"]
     data["촬영일시목록"] = mob["촬영일시목록"]
+    try:
+        data["환경기술인"] = gv(driver, "#field_officer_name")
+    except Exception:
+        data["환경기술인"] = ""
+
+    sno = (sample_no or data.get("시료번호") or "").strip()
+    photos = []
+    if sno:
+        try:
+            photos = download_field_photos(driver, sno, mob.get("촬영일시목록") or [])
+        except Exception as e:
+            print(f"⚠ 현장사진 저장 실패: {e}")
+            photos = []
+    data["현장사진"] = photos
     return True
 
 
@@ -486,7 +769,7 @@ def read_site_data(driver, sample_no):
     if not data.get("PDF경로"):
         failures.append("pdf")
 
-    if not _collect_tab3_data(driver, data):
+    if not _collect_tab3_data(driver, data, sample_no=sample_no):
         failures.append("tab3")
 
     return data, (len(failures) == 0), failures
@@ -865,6 +1148,49 @@ def compare_scalar(sample, field, site_val, excel_val):
     }
 
 
+def build_list_status_compare_row(
+    sample_no: str,
+    result: str,
+    status_text: str,
+    expected: str = CHECK_LIST_EXPECTED_STATUS,
+):
+    """
+    목록 RealGrid '상태' 열 비교 행.
+    - 기대값(엑셀값): '측정분석결과 입력중'
+    - 일치 → OK, 다르거나 확인불가 → NG
+    """
+    site_val = (status_text or "").strip()
+    if result == "성공":
+        return {
+            "sample": sample_no,
+            "항목": "목록상태",
+            "사이트값": site_val or expected,
+            "엑셀값": expected,
+            "비교": "OK",
+            "사이트만존재": "",
+            "엑셀만존재": "",
+        }
+    if result == "실패":
+        return {
+            "sample": sample_no,
+            "항목": "목록상태",
+            "사이트값": site_val or "(상태 불일치)",
+            "엑셀값": expected,
+            "비교": "NG",
+            "사이트만존재": "",
+            "엑셀만존재": "",
+        }
+    return {
+        "sample": sample_no,
+        "항목": "목록상태",
+        "사이트값": site_val or "(확인불가)",
+        "엑셀값": expected,
+        "비교": "NG",
+        "사이트만존재": "",
+        "엑셀만존재": "",
+    }
+
+
 def compare_list(sample, field, site_list, excel_list):
     # 탭1 인력·차량·장비: 슬래시 규칙·공백 제거 후 비교 (eco_input 탭1 등록과 동일)
     if field in ("인력", "차량", "장비"):
@@ -992,6 +1318,20 @@ def build_comparison_rows(sample_no, site, excel):
         "엑셀만존재": "",
     })
 
+    # 측정시설 ↔ 입력!E4 측정인 시설명
+    s_fac = site.get("측정시설", "")
+    e_fac = excel.get("측정인시설명", "")
+    fac_ok = facility_labels_match(s_fac, e_fac)
+    rows.append({
+        "sample": sample_no,
+        "항목": "측정시설",
+        "사이트값": s_fac,
+        "엑셀값": e_fac,
+        "비교": "OK" if fac_ok else "NG",
+        "사이트만존재": "",
+        "엑셀만존재": "",
+    })
+
     # ★ 비산먼지면 특정 필드는 비교 PASS
     is_dust = bool(excel.get("is_dust") or site.get("is_dust"))
 
@@ -1008,11 +1348,45 @@ def build_comparison_rows(sample_no, site, excel):
     es = excel.get("측정시작DT", "")
     ee = excel.get("측정종료DT", "")
 
+    rows.append({
+        "sample": sample_no,
+        "항목": "환경기술인",
+        "사이트값": site.get("환경기술인", ""),
+        "엑셀값": "",
+        "비교": "",
+        "사이트만존재": "",
+        "엑셀만존재": "",
+    })
     rows.append(compare_mobile_single(sample_no, "환경기술인입력일시",
                                       site.get("환경기술인입력일시", ""), es, ee))
     rows.append(compare_mobile_single(sample_no, "GPS위치확인일시",
                                       site.get("GPS위치확인일시", ""), es, ee))
     rows.append(compare_mobile_photos(sample_no, site.get("촬영일시목록", []), es, ee))
+
+    # 현장사진 1~3 — 촬영일시만 (경로는 미리보기로 확인)
+    photos = site.get("현장사진") or []
+    if not isinstance(photos, list):
+        photos = []
+    for i in range(1, 4):
+        p = next((x for x in photos if isinstance(x, dict) and int(x.get("idx") or 0) == i), None)
+        if p is None and i - 1 < len(photos) and isinstance(photos[i - 1], dict):
+            p = photos[i - 1]
+        path = (p or {}).get("path", "") if p else ""
+        shot = (p or {}).get("shot_at", "") if p else ""
+        if not shot:
+            arr = site.get("촬영일시목록") or []
+            if i - 1 < len(arr):
+                shot = arr[i - 1]
+        has_file = bool(path and os.path.isfile(path))
+        rows.append({
+            "sample": sample_no,
+            "항목": f"현장사진{i}",
+            "사이트값": shot,
+            "엑셀값": "",
+            "비교": "OK" if has_file else "NG",
+            "사이트만존재": "" if has_file else (shot or "사진파일없음"),
+            "엑셀만존재": "",
+        })
 
     # RealGrid 비교는 그대로 (아래 2)에서 로직 추가)
     try:
@@ -1045,6 +1419,103 @@ def _next_available_path(path: str) -> str:
             return cand
     return f"{base}_{int(time.time())}{ext}"
 
+
+def _photo_paths_from_map(sample_no: str) -> list[str]:
+    photos = PHOTO_MAP.get(sample_no) or []
+    paths = []
+    for p in photos:
+        if isinstance(p, dict):
+            path = (p.get("path") or "").strip()
+        else:
+            path = str(p or "").strip()
+        if path and os.path.isfile(path):
+            paths.append(path)
+    return paths
+
+
+def _photo_shots_from_map(sample_no: str) -> list[str]:
+    photos = PHOTO_MAP.get(sample_no) or []
+    shots = []
+    for p in photos:
+        if isinstance(p, dict):
+            shots.append((p.get("shot_at") or "").strip())
+        else:
+            shots.append("")
+    return shots
+
+
+def _embed_field_photos(
+    ws,
+    photo_paths: list[str],
+    *,
+    start_col: int = 7,
+    anchor_row: int | None = None,
+    title: str = "현장사진 미리보기",
+    shot_times: list[str] | None = None,
+    max_w: int = 280,
+    max_h: int = 210,
+    row_height: float = 160,
+    labels_on_anchor_row: bool = False,
+) -> int:
+    """시트에 현장사진 미리보기 삽입. 다음 사용 가능한 행 번호 반환.
+
+    labels_on_anchor_row=True 이면
+      anchor_row: (시료번호 등과 같은 줄) PIC 라벨
+      anchor_row+1: 이미지
+    기본(False)은 title 행 → 라벨 → 이미지.
+    """
+    try:
+        from openpyxl.drawing.image import Image as XLImage
+        from openpyxl.utils import get_column_letter
+    except Exception as e:
+        print(f"⚠ 이미지 삽입 모듈 실패: {e}")
+        return anchor_row or (ws.max_row + 2)
+
+    if not photo_paths:
+        return anchor_row or (ws.max_row + 2)
+
+    row0 = anchor_row if anchor_row is not None else max(ws.max_row + 2, 2)
+    if labels_on_anchor_row:
+        label_row = row0
+        img_row = row0 + 1
+    else:
+        if title:
+            ws.cell(row=row0, column=start_col, value=title)
+            label_row = row0 + 1
+            img_row = row0 + 2
+        else:
+            label_row = row0
+            img_row = row0 + 1
+
+    col = start_col
+    shots = list(shot_times or [])
+    for i, path in enumerate(photo_paths, start=1):
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            label = f"PIC{i}"
+            if i - 1 < len(shots) and shots[i - 1]:
+                label = f"PIC{i} ({shots[i - 1]})"
+            ws.cell(row=label_row, column=col, value=label)
+            img = XLImage(path)
+            try:
+                ow, oh = float(img.width or max_w), float(img.height or max_h)
+                scale = min(max_w / ow, max_h / oh, 1.0)
+                img.width = int(ow * scale)
+                img.height = int(oh * scale)
+            except Exception:
+                img.width = max_w
+                img.height = max_h
+            img.anchor = f"{get_column_letter(col)}{img_row}"
+            ws.add_image(img)
+            ws.column_dimensions[get_column_letter(col)].width = max(38, int(max_w / 7))
+            ws.row_dimensions[img_row].height = row_height
+            col += 2
+        except Exception as e:
+            print(f"⚠ 현장사진 삽입 실패({path}): {e}")
+    return img_row + 2
+
+
 def save_results(sample_rows_map, out_path):
     wb = Workbook()
     ws_sum = wb.active
@@ -1072,6 +1543,7 @@ def save_results(sample_rows_map, out_path):
 
         # PDF 하이퍼링크 행 추가
         pdf_path = PDF_MAP.get(sample_no, "")
+        sum_pdf_row = None
         if pdf_path:
             row_idx = ws.max_row + 1
             ws.cell(row=row_idx, column=1, value="PDF 열기")
@@ -1079,24 +1551,54 @@ def save_results(sample_rows_map, out_path):
             link_cell.hyperlink = pdf_path
             link_cell.style = "Hyperlink"
 
-            sum_row = ws_sum.max_row + 1
+            sum_pdf_row = ws_sum.max_row + 1
             company = COMPANY_MAP.get(sample_no, "")
-            ws_sum.cell(row=sum_row, column=1, value=sample_no)
-            ws_sum.cell(row=sum_row, column=2, value=company)
-            ws_sum.cell(row=sum_row, column=3, value="PDF 열기")
-            ws_sum.cell(row=sum_row, column=4, value="OK")
-            sum_link_cell = ws_sum.cell(row=sum_row, column=5, value=pdf_path)
+            ws_sum.cell(row=sum_pdf_row, column=1, value=sample_no)
+            ws_sum.cell(row=sum_pdf_row, column=2, value=company)
+            ws_sum.cell(row=sum_pdf_row, column=3, value="PDF 열기")
+            ws_sum.cell(row=sum_pdf_row, column=4, value="OK")
+            sum_link_cell = ws_sum.cell(row=sum_pdf_row, column=5, value=pdf_path)
             sum_link_cell.hyperlink = pdf_path
             sum_link_cell.style = "Hyperlink"
+
+        # 시료 시트 + 요약(PDF 바로 아래) 미리보기 — sample_rows_map(=해당 팀)만
+        photo_paths = _photo_paths_from_map(sample_no)
+        if photo_paths:
+            _embed_field_photos(
+                ws,
+                photo_paths,
+                shot_times=_photo_shots_from_map(sample_no),
+            )
+
+            company = COMPANY_MAP.get(sample_no, "")
+            photo_row = (sum_pdf_row + 1) if sum_pdf_row else (ws_sum.max_row + 1)
+            ws_sum.cell(row=photo_row, column=1, value=sample_no)
+            ws_sum.cell(row=photo_row, column=2, value=company)
+            ws_sum.cell(row=photo_row, column=3, value="현장사진")
+            ws_sum.cell(row=photo_row, column=4, value="OK")
+            next_row = _embed_field_photos(
+                ws_sum,
+                photo_paths,
+                start_col=5,
+                anchor_row=photo_row,
+                title="",
+                shot_times=_photo_shots_from_map(sample_no),
+                max_w=220,
+                max_h=165,
+                row_height=130,
+                labels_on_anchor_row=True,
+            )
+            # 이미지 행 아래로 다음 시료 데이터 밀기
+            if next_row and ws_sum.max_row < next_row:
+                ws_sum.cell(row=next_row, column=1, value="")
 
     # NG 빨간색 조건부서식
     red_fill = PatternFill(start_color="FFFF0000", end_color="FFFF0000", fill_type="solid")
 
-    # 요약 시트(C열)
     if ws_sum.max_row > 1:
         rule_sum = FormulaRule(formula=['$D2="NG"'], fill=red_fill)
         ws_sum.conditional_formatting.add(f"D2:D{ws_sum.max_row}", rule_sum)
-# 각 시료 시트(D열) - 요약/중복검사 시트들은 제외
+    # 각 시료 시트(D열) - 요약/중복검사 시트들은 제외
     for name in wb.sheetnames:
         if name == "요약":
             continue
@@ -1283,6 +1785,7 @@ def main(progress_callback=None, cancel_event=None):
                             continue
 
                     PDF_MAP[sample_no] = site.get("PDF경로", "")
+                    PHOTO_MAP[sample_no] = site.get("현장사진") or []
                     xlsx = find_excel_for_sample(sample_no)
                     if not xlsx:
                         go_back_to_list(driver)
@@ -1299,6 +1802,7 @@ def main(progress_callback=None, cancel_event=None):
                         "업소명": excel.get("업소명", ""),
                         "측정시작DT": excel.get("측정시작DT", ""),
                         "측정종료DT": excel.get("측정종료DT", ""),
+                        "환경기술인": site.get("환경기술인", ""),
                     }
 
                     excel["is_dust"] = is_dust
@@ -1325,8 +1829,31 @@ def main(progress_callback=None, cancel_event=None):
                     excel["realgrid"] = excel_rg
 
                     rows = build_comparison_rows(sample_no, site, excel)
+                    go_back_to_list(driver)
+
+                    # 목록 RealGrid '상태' 열: 측정분석결과 입력중 인지 확인 → 결과엑셀
+                    try:
+                        st_result, st_text = verify_tab4_list_status(
+                            driver,
+                            sample_no,
+                            success_text=CHECK_LIST_EXPECTED_STATUS,
+                        )
+                    except Exception as e:
+                        st_result, st_text = "확인불가", f"(예외: {e})"
+                    rows.append(
+                        build_list_status_compare_row(sample_no, st_result, st_text)
+                    )
+                    if st_result == "성공":
+                        print(f"  ✅ 목록상태 OK: {sample_no} ({st_text or CHECK_LIST_EXPECTED_STATUS})")
+                    else:
+                        print(
+                            f"  ❌ 목록상태 NG: {sample_no} "
+                            f"→ 사이트='{st_text}' / 기대='{CHECK_LIST_EXPECTED_STATUS}'"
+                        )
+
                     sample_rows[sample_no] = rows
                     relax_env_input_time_by_company(sample_rows, excel_meta_map)
+                    relax_env_input_time_by_env_psic(sample_rows, excel_meta_map)
                     if read_ok:
                         print(" 완료 : ", sample_no)
                     else:
@@ -1334,7 +1861,6 @@ def main(progress_callback=None, cancel_event=None):
                             f" ⚠ 부분 완료 : {sample_no} "
                             f"(미수집: {', '.join(read_failures)})"
                         )
-                    go_back_to_list(driver)
                     sample_done = True
                 except Exception as e:
                     if is_logged_out(driver) and session_recover_count < 5:
@@ -1401,7 +1927,9 @@ def main(progress_callback=None, cancel_event=None):
 
 if __name__ == "__main__":
     try:
-        main()
+        from log_utils import run_log
+        with run_log("eco_check"):
+            main()
     except Exception as e:
         log_error("eco_check.main", e)
         raise

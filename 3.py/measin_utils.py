@@ -214,6 +214,177 @@ def get_samples_current_page(driver, prefix: str = "A") -> list:
     return list(dict.fromkeys(arr))
 
 
+# 탭4 입력완료 후 목록 RealGrid '상태' 열 확인용
+# 목록 그리드: [시료번호] … 오른쪽 두 번째 열 = [상태]
+TAB4_LIST_SUCCESS_STATUS = "측정분석결과 입력완료"
+TAB4_LIST_STATUS_OFFSET = 2  # 시료번호 열에서 오른쪽으로 몇 칸
+
+
+def _norm_status_text(s: str) -> str:
+    return re.sub(r"\s+", "", (s or "").replace("*", "").strip())
+
+
+def _is_tab4_success_status(status: str, success_text: str = TAB4_LIST_SUCCESS_STATUS) -> bool:
+    if not status:
+        return False
+    a, b = _norm_status_text(status), _norm_status_text(success_text)
+    return a == b or b in a
+
+
+def _read_list_row_status(driver, sample_no: str) -> str | None:
+    """
+    목록 RealGrid: 시료번호와 일치하는 .rg-renderer(상세 진입 더블클릭과 동일)를 찾고,
+    같은 행에서 시료번호 열 + 2칸(상태) 텍스트를 읽음.
+  """
+    xp = (
+        f"//div[contains(@class,'rg-renderer') and normalize-space()='{sample_no}']"
+    )
+    try:
+        renderers = driver.find_elements(By.XPATH, xp)
+    except Exception:
+        renderers = []
+
+    sample_ren = None
+    for ren in renderers:
+        try:
+            td = ren.find_element(By.XPATH, "./ancestor::td[1]")
+            tr = td.find_element(By.XPATH, "./ancestor::tbody/tr[1]")
+            root = ren.find_element(By.XPATH, "./ancestor::div[contains(@class,'rg-root')][1]")
+            if td and tr and root:
+                sample_ren = ren
+                break
+        except Exception:
+            continue
+
+    if sample_ren is None:
+        return None
+
+    js = r"""
+    const ren = arguments[0];
+    const statusOff = arguments[1];
+    const sampleNo = arguments[2];
+
+    const cellText = (td) => {
+      if (!td) return "";
+      const r = td.querySelector(".rg-renderer");
+      const raw = r
+        ? (r.innerText || r.textContent || "")
+        : (td.innerText || td.textContent || "");
+      return (raw + "").replace(/\s+/g, " ").trim();
+    };
+
+    const sampleTd = ren.closest("td");
+    const sampleTr = sampleTd && sampleTd.closest("tbody tr");
+    const tbody = sampleTr && sampleTr.closest("tbody");
+    const root = sampleTd && sampleTd.closest(".rg-root");
+    if (!sampleTr || !tbody || !root) return null;
+
+    const rowIndex = Array.prototype.indexOf.call(
+      tbody.querySelectorAll("tr"), sampleTr
+    );
+    if (rowIndex < 0) return null;
+
+    const bodyTables = Array.from(root.querySelectorAll(
+      ".rg-fixed-body table, .rg-scroll-body table, .rg-body table"
+    ));
+    const seen = new Set();
+    const rowCells = [];
+    for (const tbl of bodyTables) {
+      if (seen.has(tbl)) continue;
+      seen.add(tbl);
+      const rows = tbl.querySelectorAll("tbody tr");
+      if (rowIndex >= rows.length) continue;
+      const tr = rows[rowIndex];
+      for (const td of tr.querySelectorAll("td")) rowCells.push(cellText(td));
+    }
+
+    const cSample = rowCells.findIndex((t) => t === sampleNo);
+    if (cSample < 0) return null;
+    const cStatus = cSample + statusOff;
+    if (cStatus >= rowCells.length) return "";
+    return rowCells[cStatus] || "";
+    """
+    try:
+        return driver.execute_script(
+            js, sample_ren, int(TAB4_LIST_STATUS_OFFSET), sample_no
+        )
+    except Exception:
+        return None
+
+
+def _search_sample_on_list(
+    driver,
+    sample_no: str,
+    search_box: str = "#search_meas_mgmt_no",
+) -> bool:
+    """목록 화면에서 시료번호 검색 (open_sample_detail과 동일 타이밍)."""
+    try:
+        inp = driver.find_element(By.CSS_SELECTOR, search_box)
+        try:
+            inp.clear()
+        except Exception:
+            driver.execute_script("arguments[0].value='';", inp)
+        inp.send_keys(sample_no)
+        time.sleep(0.3)
+        safe_click(driver, "#btnSearch")
+        time.sleep(1.5)
+        wait_grid_loaded(driver, timeout=8, warn_msg="⚠ 목록 RealGrid 재검색 대기")
+        return True
+    except Exception:
+        return False
+
+
+def verify_tab4_list_status(
+    driver,
+    sample_no: str,
+    search_box: str = "#search_meas_mgmt_no",
+    success_text: str = TAB4_LIST_SUCCESS_STATUS,
+) -> tuple[str, str]:
+    """
+    탭4 입력 후 목록 복귀 → 해당 행 상태열(시료번호+2) 확인.
+
+    상세 진입 때 이미 시료번호로 검색한 상태이므로, 복귀 직후엔 재검색 없이 읽는다.
+    행을 못 찾을 때만 시료번호 재검색 후 한 번 더 시도.
+
+    Returns:
+      (결과, 상태문구)  결과: "성공" | "실패" | "확인불가"
+    """
+    if not is_field_list_ready(driver, search_box):
+        return "확인불가", "(목록 화면 아님)"
+
+    try:
+        wait_grid_loaded(driver, timeout=8, warn_msg="⚠ 목록 RealGrid 상태 확인 대기")
+    except Exception:
+        pass
+
+    status = None
+    for _ in range(3):
+        status = _read_list_row_status(driver, sample_no)
+        if status is not None:
+            break
+        time.sleep(0.8)
+
+    # 현재 목록에 없으면(페이지/필터 등) 그때만 시료번호 재검색
+    if status is None:
+        if _search_sample_on_list(driver, sample_no, search_box):
+            for _ in range(3):
+                status = _read_list_row_status(driver, sample_no)
+                if status is not None:
+                    break
+                time.sleep(0.8)
+        else:
+            return "확인불가", "(재검색 실패)"
+
+    if status is None:
+        return "확인불가", "(시료번호 행을 못 찾음)"
+    if str(status).strip() == "":
+        return "확인불가", "(상태 열 비어있음)"
+
+    if _is_tab4_success_status(status, success_text):
+        return "성공", status
+    return "실패", status
+
+
 # 시료 상세 진입 실패 시 — 목록 복귀 후 시료번호 검색부터 재시도 (eco_input / eco_check 공통)
 MAX_SAMPLE_DETAIL_RETRY = 3
 
@@ -447,6 +618,8 @@ def go_back_to_list(driver,
         btn_selectors = [
             "#btnMsFieldDocCancel",                                  # eco_input 기본
             "#btnGoList",                                            # eco_input 탭4
+            "#updateFieldPlanForm > div:nth-child(19) > div > div > button.btn.btnCancel",  # 탭1만
+            "#updateFieldPlanForm button.btn.btnCancel",             # 탭1 폼 취소 fallback
             "#t3 > div:nth-child(2) > div > button.btn.btnCancel",  # eco_check 스타일
         ]
 

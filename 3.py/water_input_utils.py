@@ -14,7 +14,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium_utils import safe_click, set_date_js, wait_el, tab4_alerts_after_save, tab4_after_comp_save_confirm
 from selenium_utils import accept_all_alerts as _accept_all_alerts
-from excel_com_utils import get_excel_app
+from excel_com_utils import get_excel_app, ungroup_excel_sheets
 from realgrid_utils import rg_dump_headers
 from tab4_utils import _norm_rg, tab4_find_tr_by_item, tab4_paste_row_using_tab2
 from config import WATER_TAB4_MACRO_FILE, WATER_TAB4_GRID_ROOT
@@ -178,6 +178,7 @@ def read_water_tab4_from_macro_xlsm(sample_no: str) -> dict:
         if ws is None:
             ws = wb.Worksheets(WATER_ANZE_SHEET)
 
+        ungroup_excel_sheets(wb, ws)
         # 활성 시트가 다른 곳이어도 작업 시트를 강제로 맞춘다.
         try:
             ws.Activate()

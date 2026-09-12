@@ -52,6 +52,8 @@ DUST_SKIP_FIELDS = {
 SEL_DATE         = "#meas_end_dt"
 SEL_START_TIME   = "#meas_start_time"
 SEL_END_TIME     = "#meas_end_time"
+SEL_WEATHER      = "select.meas_wthr, select[name='meas_wthr']"
+SEL_EMIS_FAC     = "#edit_emis_fac_no"  # 탭1 측정시설 (Select2)
 SEL_O2_STD       = "#basis_o2c"
 SEL_O2_MEAS      = "#meas_o2c"
 SEL_GAS_VOL_PRE  = "#meas_gas_fvol"
