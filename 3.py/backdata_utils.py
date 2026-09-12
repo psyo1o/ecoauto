@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timedelta
 import win32clipboard
 from openpyxl import load_workbook
-from excel_com_utils import get_excel_app
+from excel_com_utils import get_excel_app, ungroup_excel_sheets
 from data_utils import sample_to_datestr
 from file_utils import is_fugitive_dust_file
 from config import MOISTURE_ROOT, THC_ROOT
@@ -225,6 +225,7 @@ def export_csv_display_as_is(excel_path: str, sheet_name: str, out_csv_path: str
     wb = None
     try:
         wb = excel.Workbooks.Open(excel_path, ReadOnly=True, UpdateLinks=0)
+        ungroup_excel_sheets(wb, sheet_name)
         ws = wb.Worksheets(sheet_name)
         return _export_moist_csv_from_open_ws(excel, ws, out_csv_path, max_rows=max_rows)
     finally:
@@ -275,6 +276,7 @@ def export_fid_by_excel_copy(excel_path: str, sheet_name: str, out_fid_path: str
     wb = None
     try:
         wb = excel.Workbooks.Open(excel_path, ReadOnly=True, UpdateLinks=0)
+        ungroup_excel_sheets(wb, sheet_name)
         ws = wb.Worksheets(sheet_name)
         return _export_pf_fid_from_open_ws(excel, ws, out_fid_path, fixed_rows=150)
     finally:
@@ -426,6 +428,7 @@ def export_backdata_moist_thc(excel_path: str, sample_no: str):
         if need_moist or (need_thc and not is_fid_mode):
             excel = get_excel_app()
             wb_xl = excel.Workbooks.Open(excel_path, ReadOnly=True, UpdateLinks=0)
+            ungroup_excel_sheets(wb_xl)
 
         # -----------------------
         # (A) 수분 CSV (표시값 그대로)
@@ -562,6 +565,7 @@ def _extract_expected_backdata_text(excel_path: str, kind: str) -> str:
         wb_xl = None
         try:
             wb_xl = excel.Workbooks.Open(excel_path, ReadOnly=True, UpdateLinks=0)
+            ungroup_excel_sheets(wb_xl, "수분량자동측정")
             try:
                 ws = wb_xl.Worksheets("수분량자동측정")
             except Exception:
@@ -603,6 +607,7 @@ def _extract_expected_backdata_text(excel_path: str, kind: str) -> str:
         try:
             wb_xl = excel.Workbooks.Open(excel_path, ReadOnly=True, UpdateLinks=0)
             sheet_name = "THC 측정값(PF)"
+            ungroup_excel_sheets(wb_xl, sheet_name)
             try:
                 ws = wb_xl.Worksheets(sheet_name)
             except Exception:

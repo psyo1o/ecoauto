@@ -11,7 +11,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium_utils import safe_click, set_date_js, tab4_alerts_after_save, tab4_after_comp_save_confirm
 from realgrid_utils import rg_paste_to_tr_tab4
-from excel_com_utils import get_excel_app
+from excel_com_utils import get_excel_app, ungroup_excel_sheets
 from data_utils import sample_to_datestr
 from config import TAB4_MACRO_FILE
 
@@ -71,6 +71,7 @@ def read_tab4_from_macro_xlsm(sample_no: str) -> dict:
 
         wb = excel.Workbooks.Open(ANZE_XLSM, ReadOnly=True, UpdateLinks=0)
         ws = wb.Worksheets(ANZE_SHEET)
+        ungroup_excel_sheets(wb, ws)
         # 활성 시트가 다른 곳이어도 작업 시트를 강제로 맞춘다.
         try:
             ws.Activate()

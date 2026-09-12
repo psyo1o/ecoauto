@@ -38,7 +38,7 @@ def _raise_policy_block(cause: BaseException) -> None:
         "ChromeDriver 실행이 Windows '애플리케이션 제어 정책'에 막혔습니다.\n"
         "(대기·수질 모두 같은 Chrome 드라이버를 사용합니다.)\n\n"
         "조치:\n"
-        "1) PC에서 0.처음사용시\\드라이버 자동설치(크롬).bat 실행\n"
+        "1) PC에서 0.처음사용시\\드라이버 자동설치(크롬).py 실행\n"
         "2) 새 터미널·프로그램 재실행 또는 PC 재로그인\n"
         "3) 계속되면 IT에 chromedriver.exe / Google Chrome 실행 허용 요청\n\n"
         f"원인: {cause}"

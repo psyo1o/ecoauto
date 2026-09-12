@@ -1,0 +1,23 @@
+# 측정인 자동화 도구 — 필수 Python 패키지
+# 이 파일만 수정하면 아래가 같이 반영됩니다.
+#   - 0.처음사용시/파이썬 패키지.py
+#   - 2.검토 및 입력프로그램.pyw (시작 시 자동 설치)
+#   - (통합설치.py 는 파이썬 패키지.py 를 호출하므로 별도 수정 불필요)
+#
+# 한 줄에 패키지 하나. # 주석·빈 줄 무시.
+# 버전 지정 가능: 예) openpyxl>=3.1.0
+
+selenium
+webdriver-manager
+openpyxl
+pandas
+pywin32
+requests
+pywinauto
+pyperclip
+PyPDF2
+pypdf
+tkinterdnd2
+pillow
+numpy
+reportlab

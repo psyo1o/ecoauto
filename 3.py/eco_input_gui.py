@@ -98,9 +98,7 @@ class EcoInputGUI:
         self._setup_dependencies()
         # DnD 실패 메시지는 UI 구성이 끝난 뒤 로그로만 표시
         if self._dnd_fail_msg:
-            self.log_panel.widget.configure(state="normal")
-            self.log_panel.widget.insert("end", f"[INFO] 드래그&드롭 비활성화 (원인: {self._dnd_fail_msg})\n")
-            self.log_panel.widget.configure(state="disabled")
+            print(f"[INFO] 드래그&드롭 비활성화 (원인: {self._dnd_fail_msg})")
 
     # ──────────────────────────────────────────────
     # 윈도우 / 위젯 초기 구성
@@ -390,6 +388,15 @@ class EcoInputGUI:
         except tk.TclError:
             return False
 
+    def _sync_media_from_tab(self) -> str:
+        """열린 대기/수질 탭을 media_var에 맞춘 뒤 '1' 또는 '2'를 반환."""
+        try:
+            is_water = self.media_nb.select() == str(self.water_tab)
+        except tk.TclError:
+            is_water = self.media_var.get() == "2"
+        self.media_var.set("2" if is_water else "1")
+        return self.media_var.get()
+
     def _set_login_enabled(self, enabled: bool, *, clear: bool = True):
         self.entry_id.configure(state="normal")
         self.entry_pw.configure(state="normal")
@@ -630,7 +637,7 @@ class EcoInputGUI:
             messagebox.showerror("드래그&드롭 오류", str(e), parent=self.root)
 
     def _on_drop_by_media(self, event):
-        if self.media_var.get() == "2":
+        if self._sync_media_from_tab() == "2":
             return self._on_drop_water(event)
         if self.mode_var.get() == "1":
             return self._on_drop_air(event)
@@ -639,7 +646,7 @@ class EcoInputGUI:
     # 실행 버튼
     # ──────────────────────────────────────────────
     def _on_start(self):
-        media = self.media_var.get()
+        media = self._sync_media_from_tab()
 
         if media == "2":
             answers = self._build_answers_water()
