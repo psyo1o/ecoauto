@@ -39,6 +39,11 @@ warnings.filterwarnings(
     category=UserWarning,
     message="Conditional Formatting extension is not supported and will be removed"
 )
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message="Data Validation extension is not supported and will be removed"
+)
 
 # ============================================================
 # 공통 유틸 모듈 (모듈화)
@@ -62,6 +67,8 @@ from measin_utils import (
     is_logged_out,
     MAX_SAMPLE_DETAIL_RETRY,
     collect_samples_from_files,
+    verify_tab4_list_status,
+    TAB4_LIST_SUCCESS_STATUS,
     LOGIN_URL, FIELD_URL, NAS_BASE, NAS_DIRS
 )
 from format_utils import (
@@ -71,6 +78,7 @@ from format_utils import (
     normalize_tab1_staff_list,
     normalize_tab1_vehicle_list,
     normalize_tab1_equipment_list,
+    norm_facility_label,
 )
 from data_utils import parse_ymd_date, sample_to_datestr, clean_leading_mark as clean
 from realgrid_utils import (
@@ -81,12 +89,12 @@ from select2_utils import Select2Handler as _Select2Handler
 from pdf_utils import merge_pdfs as _merge_pdfs, PDFExporter as _PDFExporter
 from excel_utils import find_sheet_by_candidates as _find_sheet_by_candidates
 from file_utils import collect_samples_from_nas as _collect_samples_from_nas_util, find_best_matching_file as _find_best_file_util, is_fugitive_dust_file
-from excel_com_utils import get_excel_app, kill_excel_app
-from log_utils import log_error
+from excel_com_utils import get_excel_app, kill_excel_app, ungroup_excel_sheets
+from log_utils import log_error, run_log
 from measin_constants import (
     SKIP_VOL_AND_SPEED, SKIP_SPEED_ONLY, HEAVY_METALS,
     SM3_ITEMS as sm3_items,
-    SEL_DATE, SEL_START_TIME, SEL_END_TIME,
+    SEL_DATE, SEL_START_TIME, SEL_END_TIME, SEL_WEATHER, SEL_EMIS_FAC,
     SEL_O2_STD, SEL_O2_MEAS, SEL_GAS_VOL_PRE, SEL_GAS_VOL_POST,
     SEL_MOISTURE, SEL_GAS_TEMP, SEL_GAS_SPEED
 )
@@ -111,10 +119,107 @@ from water_input_utils import (
     water_tab4_tab_clickable,
     WATER_DETAIL_ENTRY_SEL,
 )
+from groupware_client import (
+    GroupwareRunLog,
+    _has_critical_field_warnings,
+    _soft_facility_warnings,
+    export_groupware_summary,
+    is_groupware_enabled,
+    payload_to_excel_rows,
+    sync_tab4_complete,
+    sync_to_groupware,
+)
 
-# =====================================================================
-# 설정
-# =====================================================================
+_GW_SYNC_RETRIES = 3       # 전송 실패 시 재시도 횟수
+_GW_SYNC_RETRY_WAIT = 5   # 재시도 대기 초
+
+def _try_groupware_tab4_sync(
+    gw_log: GroupwareRunLog | None,
+    *,
+    media: str,
+    sample_no: str,
+    excel_path: str,
+    tab4_meta: dict | None = None,
+    excel_meta: dict | None = None,
+    pdf_path: str | None = None,
+    company_name: str = "",
+):
+    """탭4 입력완료 후 그룹웨어 전송 + 결과 확인. 실패 시 재시도 (자동입력은 계속)."""
+    import time as _time
+    if gw_log is None:
+        return
+
+    last_result: dict = {}
+    for attempt in range(1, _GW_SYNC_RETRIES + 1):
+        # gw_log 누적은 마지막 시도에만 (중간 재시도에서 중복 행 방지)
+        log_now = (attempt == _GW_SYNC_RETRIES)
+        try:
+            result = sync_tab4_complete(
+                gw_log,
+                media=media,
+                sample_no=sample_no,
+                excel_path=excel_path,
+                tab4_meta=tab4_meta,
+                excel_meta=excel_meta,
+                pdf_path=pdf_path,
+                company_name=company_name,
+                _log_to_gw_log=log_now,
+            )
+            last_result = result
+        except Exception as e:
+            print(f"⚠ 그룹웨어 연동 오류 ({sample_no}) [시도 {attempt}/{_GW_SYNC_RETRIES}]: {e}")
+            log_error(f"eco_input.groupware.{media}", e)
+            last_result = {"data_ok": False, "pdf_ok": False, "pdf_attempted": bool(pdf_path), "error": str(e)}
+
+        data_ok = last_result.get("data_ok", False)
+        pdf_ok  = last_result.get("pdf_ok", False)
+        pdf_attempted = last_result.get("pdf_attempted", False)
+        err     = last_result.get("error", "")
+        warns   = last_result.get("warnings") or []
+        verify_key = last_result.get("verify_key") or ""
+
+        # 422 거래처 미매칭 등 재시도해도 해결 안 되는 경우 즉시 종료
+        if not data_ok and "422" in err:
+            print(f"❌ 그룹웨어 전송 불가 ({sample_no}): 거래처 미매칭 — 재시도 생략. 오류: {err}")
+            break
+
+        field_warn = _has_critical_field_warnings(warns)
+        soft_fac = _soft_facility_warnings(warns)
+        all_ok = data_ok and (pdf_ok or not pdf_attempted) and not field_warn
+        if all_ok:
+            if pdf_attempted:
+                print(f"✅ 그룹웨어 전송 완료 ({sample_no}): 데이터 OK, PDF OK")
+            else:
+                print(f"✅ 그룹웨어 전송 완료 ({sample_no}): 데이터 OK (PDF 없음)")
+            if verify_key:
+                print(f"   verify_key={verify_key}")
+            if soft_fac:
+                print(f"   ⚠ 시설 soft (재시도 안 함, 데이터는 저장됨):")
+                for w in soft_fac:
+                    print(f"      · {w}")
+                print("   → 그룹웨어에 시설 등록 후: `groupware_resend_gui.py` 기간 재전송")
+            # 성공 시 gw_log 누적 (마지막 시도 아닌 경우 아직 기록 안 됐으므로)
+            if gw_log is not None and not log_now:
+                _payload = last_result.get("_payload") or {}
+                if _payload:
+                    gw_log.add_rows(payload_to_excel_rows(_payload, last_result))
+            break
+
+        # 부분 실패 상세 출력
+        if not data_ok:
+            print(f"⚠ 그룹웨어 데이터 전송 실패 ({sample_no}) [시도 {attempt}/{_GW_SYNC_RETRIES}]: {err}")
+        elif field_warn:
+            print(f"⚠ 그룹웨어 필드 경고 ({sample_no}) [시도 {attempt}/{_GW_SYNC_RETRIES}]: {warns}")
+        elif not pdf_ok and pdf_attempted:
+            print(f"⚠ 그룹웨어 PDF 전송 실패 ({sample_no}) [시도 {attempt}/{_GW_SYNC_RETRIES}]: {err}")
+
+        if attempt < _GW_SYNC_RETRIES:
+            print(f"   → {_GW_SYNC_RETRY_WAIT}초 후 재시도...")
+            _time.sleep(_GW_SYNC_RETRY_WAIT)
+    else:
+        # 모든 재시도 소진
+        print(f"❌ 그룹웨어 전송 최종 실패 ({sample_no}): {last_result.get('error', '')} — 로그 엑셀 확인 바람")
+
 from config import (
     REPORT_DONE,
     PDF_AIR,
@@ -322,11 +427,148 @@ def back_to_list(d, btn_selector="#btnMsFieldDocCancel"):
     selectors = [btn_selector]
     if btn_selector != "#btnGoList":
         selectors.append("#btnGoList")
+    # 탭1만 입력 후: updateFieldPlanForm 하단 취소(=목록)
+    selectors.extend([
+        "#updateFieldPlanForm > div:nth-child(19) > div > div > button.btn.btnCancel",
+        "#updateFieldPlanForm button.btn.btnCancel",
+    ])
     # accept_any_alert 먼저 처리
     accept_any_alert(d, timeout=2)
     result = _go_back_to_list(d, btn_selectors=selectors)
     accept_any_alert(d, timeout=2)
     return result
+
+
+def _record_tab4_status_result(
+    results: list,
+    sample: str,
+    result: str,
+    status_text: str = "",
+):
+    """탭4 목록 상태 확인 결과 누적 + 즉시 로그."""
+    results.append({"sample": sample, "result": result, "status": status_text or ""})
+    if result == "성공":
+        print(f"✅ 탭4 상태확인 성공: {sample} ({status_text or TAB4_LIST_SUCCESS_STATUS})")
+    elif result == "실패":
+        detail = status_text or "(상태 문구 불일치/처리실패)"
+        print(f"❌ 탭4 상태확인 실패: {sample} → {detail}")
+    else:
+        detail = f" ({status_text})" if status_text else ""
+        print(f"⚠ 탭4 상태확인 확인불가: {sample}{detail}")
+
+
+def _verify_and_record_tab4_list_status(driver, results: list, sample: str):
+    """목록 복귀 후 RealGrid '상태' 열 확인 → results에 기록."""
+    try:
+        result, status_text = verify_tab4_list_status(driver, sample)
+    except Exception as e:
+        result, status_text = "확인불가", f"(예외: {e})"
+    _record_tab4_status_result(results, sample, result, status_text)
+
+
+def _print_tab4_status_summary(results: list, label: str = "탭4"):
+    """시료별 성공/실패/확인불가 최종 요약."""
+    if not results:
+        return
+    ok = [r for r in results if r["result"] == "성공"]
+    ng = [r for r in results if r["result"] == "실패"]
+    unk = [r for r in results if r["result"] == "확인불가"]
+
+    print(f"\n{'='*51}")
+    print(f"=== {label} 입력 결과 요약 (목록 '상태' 열) ===")
+    print(f"  성공 {len(ok)} / 실패 {len(ng)} / 확인불가 {len(unk)}  (총 {len(results)})")
+    print(f"  성공 기준: '{TAB4_LIST_SUCCESS_STATUS}'")
+    if ok:
+        print("  ✅ 성공:")
+        for r in ok:
+            print(f"     - {r['sample']}")
+    if ng:
+        print("  ❌ 실패:")
+        for r in ng:
+            detail = r["status"] or "(입력 처리 실패)"
+            print(f"     - {r['sample']}  [{detail}]")
+    if unk:
+        print("  ⚠ 확인불가:")
+        for r in unk:
+            detail = f" → {r['status']}" if r.get("status") else ""
+            print(f"     - {r['sample']}{detail}")
+    print(f"{'='*51}")
+
+
+def _print_groupware_summary(gw_log) -> list[dict]:
+    """그룹웨어 전송 결과 요약 출력. hard 실패 목록을 반환 (재전송 대상)."""
+    if gw_log is None:
+        return []
+    failed = gw_log.failed_samples()
+    soft = gw_log.facility_soft_samples()
+    total = len(gw_log._results)
+    if total == 0:
+        return []
+
+    ok_count = total - len(failed)
+    print(f"\n{'='*51}")
+    print(f"=== 그룹웨어 전송 결과 요약 ===")
+    print(f"  성공 {ok_count} / 실패 {len(failed)} / 전체 {total}")
+    if ok_count:
+        failed_nos = {f["sample_no"] for f in failed}
+        ok_samples = [s for s in gw_log._results if s not in failed_nos]
+        print("  ✅ 성공:")
+        for s in ok_samples:
+            r = gw_log._results[s]
+            pdf_mark = "(PDF 포함)" if r["pdf_ok"] else "(데이터만)"
+            vk = f" verify_key={r.get('verify_key')}" if r.get("verify_key") else ""
+            print(f"     - {s} {pdf_mark}{vk}")
+    if soft:
+        print("  ⚠ 시설 soft (데이터는 저장됨 — 그룹웨어에 시설 등록 후 재전송):")
+        for f in soft:
+            print(f"     - {f['sample_no']}  {f.get('warnings')}")
+    if failed:
+        print("  ❌ 실패 (재전송 필요):")
+        for f in failed:
+            d = "❌데이터" if not f["data_ok"] else "✅데이터"
+            p = ("❌PDF" if f["pdf_attempted"] and not f["pdf_ok"]
+                 else ("✅PDF" if f["pdf_ok"] else ""))
+            err = f"  [{f['error'][:80]}]" if f["error"] else ""
+            warns = f.get("warnings") or []
+            wtxt = f"  ⚠{warns}" if warns else ""
+            print(f"     - {f['sample_no']}  {d} {p}{err}{wtxt}")
+    print(f"{'='*51}")
+    return failed
+
+
+def _retry_groupware_failed(gw_log, failed: list[dict]):
+    """실패한 시료 그룹웨어 재전송 (콘솔 모드용). 엑셀에서 payload 재조립."""
+    if not failed:
+        return
+    import time as _time
+    from groupware_client import build_payload_air
+    print(f"\n▶ 그룹웨어 재전송 시작 ({len(failed)}건)...")
+    for f in failed:
+        sample_no = f["sample_no"]
+        payload = f.get("payload") or {}
+        excel = (payload.get("source_excel") or "").strip()
+        if excel and os.path.isfile(excel):
+            try:
+                payload = build_payload_air(sample_no, excel)
+            except Exception as e:
+                print(f"  ⚠ {sample_no}: payload 재조립 실패 — {e}")
+        if not payload:
+            print(f"  ⚠ {sample_no}: payload 없음 — 스킵")
+            continue
+        print(f"  → {sample_no} 재전송 중... collected_at={payload.get('collected_at')!r}")
+        result = sync_to_groupware(payload, pdf_path=None)
+        gw_log.record_result(sample_no, result, payload)
+        warns = result.get("warnings") or []
+        hard = _has_critical_field_warnings(warns)
+        soft = _soft_facility_warnings(warns)
+        if result.get("data_ok") and not hard:
+            if soft:
+                print(f"  ⚠ {sample_no}: 전송됐으나 시설 soft={soft}")
+            else:
+                print(f"  ✅ {sample_no}: 재전송 성공 verify_key={result.get('verify_key', '')}")
+        else:
+            print(f"  ❌ {sample_no}: 재전송 실패 — {result.get('error', '')}")
+        _time.sleep(2)
 
 
 def _is_tab2_site_completed(save_ok, do_pdf_upload, did_pdf, pdf_deleted):
@@ -399,6 +641,127 @@ def set_meas_purpose_from_excel(d, purpose_f10) -> bool:
         print(f"  → 측정용도: {MEAS_PURPOSE_LABEL[code]} (#edit_meas_purpose={val})")
         return True
     print(f"  ⚠ 측정용도 선택 실패 (F10={code} → {val})")
+    return False
+
+
+def set_emis_fac_from_excel(d, fac_name) -> bool:
+    """탭1 측정시설(#edit_emis_fac_no Select2) — 입력!E4 측정인 시설명."""
+    if fac_name in (None, ""):
+        return False
+    target = str(fac_name).strip()
+    if not target:
+        return False
+    target_n = norm_facility_label(target)
+
+    # 1) hidden <select> 옵션에서 텍스트 매칭 후 change 트리거
+    try:
+        el = WebDriverWait(d, 5).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, SEL_EMIS_FAC))
+        )
+        matched = d.execute_script(
+            """
+            var el = arguments[0], target = arguments[1], targetN = arguments[2];
+            function norm(s){ return String(s||'').replace(/\\s+/g,'').trim(); }
+            var best = null;
+            for (var i = 0; i < el.options.length; i++) {
+                var t = (el.options[i].text || '').trim();
+                if (!t) continue;
+                var n = norm(t);
+                if (t === target || n === targetN) { best = i; break; }
+                if (!best && (n.indexOf(targetN) >= 0 || targetN.indexOf(n) >= 0)) best = i;
+            }
+            if (best === null) return null;
+            el.selectedIndex = best;
+            var val = el.options[best].value;
+            if (window.jQuery) {
+                jQuery(el).val(val).trigger('change');
+            } else {
+                el.dispatchEvent(new Event('change', {bubbles:true}));
+            }
+            return (el.options[best].text || '').trim();
+            """,
+            el,
+            target,
+            target_n,
+        )
+        if matched:
+            print(f"  → 측정시설: {matched} (엑셀 E4={target})")
+            return True
+    except Exception:
+        pass
+
+    # 2) Select2 UI 검색·선택
+    try:
+        open_sels = [
+            f"{SEL_EMIS_FAC} + span .select2-selection",
+            "#select2-edit_emis_fac_no-container",
+            "span.select2-selection[aria-labelledby='select2-edit_emis_fac_no-container']",
+        ]
+        opened = False
+        for css in open_sels:
+            try:
+                box = WebDriverWait(d, 3).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, css))
+                )
+                d.execute_script("arguments[0].scrollIntoView({block:'center'});", box)
+                box.click()
+                opened = True
+                break
+            except Exception:
+                continue
+        if not opened:
+            raise RuntimeError("Select2 open failed")
+
+        wait(0.2)
+        search = None
+        for css in (
+            "body > span.select2-container--open input.select2-search__field",
+            ".select2-container--open input.select2-search__field",
+        ):
+            try:
+                search = d.find_element(By.CSS_SELECTOR, css)
+                break
+            except Exception:
+                continue
+
+        if search is not None:
+            search.clear()
+            search.send_keys(target)
+            wait(0.3)
+
+        options = d.find_elements(
+            By.CSS_SELECTOR, "ul.select2-results__options li.select2-results__option"
+        )
+        for op in options:
+            t = (op.text or "").strip()
+            if not t:
+                continue
+            tn = norm_facility_label(t)
+            if t == target or tn == target_n or target_n in tn or tn in target_n:
+                d.execute_script("arguments[0].click();", op)
+                wait(0.15)
+                print(f"  → 측정시설(Select2): {t} (엑셀 E4={target})")
+                return True
+
+        if search is not None:
+            search.send_keys(Keys.ENTER)
+            wait(0.15)
+            # 선택 결과 확인
+            try:
+                shown = d.find_element(
+                    By.CSS_SELECTOR, "#select2-edit_emis_fac_no-container"
+                ).text.strip()
+            except Exception:
+                shown = ""
+            if shown and (norm_facility_label(shown) == target_n
+                          or target_n in norm_facility_label(shown)
+                          or norm_facility_label(shown) in target_n):
+                print(f"  → 측정시설(ENTER): {shown} (엑셀 E4={target})")
+                return True
+    except Exception as e:
+        print(f"⚠ 측정시설 Select2 선택 실패({target}): {e}")
+
+    print(f"  ⚠ 측정시설 매칭 실패 (엑셀 E4={target!r})")
     return False
 
 
@@ -488,6 +851,10 @@ def fill_tab1(d, data, is_dust):
             equipment_vals,
         )
 
+    # 인력·차량·장비 입력 후 → 측정시설
+    set_emis_fac_from_excel(d, data.get("측정인시설명"))
+    wait(0.8)
+
     print("▶ 탭1 입력 완료")
 
     # 탭1 저장 버튼 (비산먼지/일반 공통)
@@ -525,6 +892,163 @@ def set_wind(d, txt):
             "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));", el)
     except: pass
 
+
+def set_weather(d, txt):
+    """기상: select.meas_wthr (맑음/구름/흐림/비 등)."""
+    if not txt:
+        return
+    val = str(txt).strip()
+    if not val:
+        return
+    try:
+        el = WebDriverWait(d, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, SEL_WEATHER))
+        )
+        sel = Select(el)
+        try:
+            sel.select_by_value(val)
+        except Exception:
+            sel.select_by_visible_text(val)
+        d.execute_script(
+            "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));", el
+        )
+    except Exception as e:
+        print(f"⚠ 기상 선택 실패({val}): {e}")
+
+
+def _o2_value_candidates(val) -> list[str]:
+    """표준산소농도 후보: '4', '4.0' 등 옵션값 매칭용."""
+    s = str(val or "").strip()
+    if not s:
+        return []
+    out = [s]
+    try:
+        f = float(s.replace(",", ""))
+        if abs(f - int(f)) < 1e-9:
+            out.append(str(int(f)))
+        out.append(f"{f:.1f}")
+        out.append(f"{f:g}")
+    except Exception:
+        pass
+    # 중복 제거, 순서 유지
+    seen = set()
+    uniq = []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    return uniq
+
+
+def set_basis_o2c(d, val):
+    """표준산소농도(#basis_o2c): Select2 단일이면 목록에서 선택, 실패 시 입력 폴백."""
+    if val in (None, ""):
+        return
+    candidates = _o2_value_candidates(val)
+    if not candidates:
+        return
+
+    # 1) 숨은 <select>에 값이 있으면 Select2도 change로 반영
+    try:
+        el = WebDriverWait(d, 5).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, SEL_O2_STD))
+        )
+        sel = Select(el)
+        for c in candidates:
+            try:
+                sel.select_by_value(c)
+                break
+            except Exception:
+                try:
+                    sel.select_by_visible_text(c)
+                    break
+                except Exception:
+                    continue
+        else:
+            raise ValueError("option not found")
+        d.execute_script(
+            """
+            var el = arguments[0];
+            if (window.jQuery) {
+                jQuery(el).val(el.value).trigger('change');
+            } else {
+                el.dispatchEvent(new Event('change', {bubbles:true}));
+            }
+            """,
+            el,
+        )
+        return
+    except Exception:
+        pass
+
+    # 2) Select2 UI 열어 검색·선택
+    try:
+        open_sels = [
+            "#basis_o2c + span .select2-selection",
+            "#select2-basis_o2c-container",
+            "span.select2-selection[aria-labelledby='select2-basis_o2c-container']",
+        ]
+        opened = False
+        for css in open_sels:
+            try:
+                box = WebDriverWait(d, 3).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, css))
+                )
+                d.execute_script("arguments[0].scrollIntoView({block:'center'});", box)
+                box.click()
+                opened = True
+                break
+            except Exception:
+                continue
+        if not opened:
+            raise RuntimeError("Select2 open failed")
+
+        wait(0.2)
+        search = None
+        for css in (
+            "body > span.select2-container--open input.select2-search__field",
+            ".select2-container--open input.select2-search__field",
+        ):
+            try:
+                search = d.find_element(By.CSS_SELECTOR, css)
+                break
+            except Exception:
+                continue
+
+        target = candidates[0]
+        if search is not None:
+            search.clear()
+            search.send_keys(target)
+            wait(0.25)
+
+        # 결과에서 동일/포함 옵션 클릭
+        options = d.find_elements(
+            By.CSS_SELECTOR, "ul.select2-results__options li.select2-results__option"
+        )
+        for op in options:
+            t = (op.text or "").strip()
+            if t in candidates or any(c in t for c in candidates):
+                d.execute_script("arguments[0].click();", op)
+                wait(0.15)
+                return
+
+        if search is not None:
+            search.send_keys(Keys.ENTER)
+            wait(0.15)
+            return
+    except Exception as e:
+        print(f"⚠ 표준산소농도 Select2 선택 실패({val}): {e}")
+
+    # 3) 최후: 직접 입력(구형 input 호환)
+    try:
+        e = d.find_element(By.CSS_SELECTOR, SEL_O2_STD)
+        e.clear()
+        e.send_keys(candidates[0])
+        wait(0.1)
+    except Exception:
+        pass
+
+
 def fill_tab2(d, data, is_dust):
     print("▶ 탭2 입력 시작")
 
@@ -535,7 +1059,7 @@ def fill_tab2(d, data, is_dust):
         except: pass
 
     # 공통
-    sv("input[name='meas_wthr']", data["기상"])
+    set_weather(d, data.get("기상"))
     sv("input[name='meas_temper']", data["기온"])
     sv("input.meas_humd", data["습도"])
     sv("input.meas_atoms", data["기압"])
@@ -546,7 +1070,7 @@ def fill_tab2(d, data, is_dust):
     sv(SEL_END_TIME, data["채취끝"])
 
     if not is_dust:
-        sv(SEL_O2_STD, data["표준산소농도"])
+        set_basis_o2c(d, data.get("표준산소농도"))
         sv(SEL_O2_MEAS, data["실측산소농도"])
         sv(SEL_GAS_VOL_PRE, data["배출가스유량전"])
         sv(SEL_GAS_VOL_POST, data["배출가스유량후"])
@@ -829,6 +1353,7 @@ def export_pdf_from_excel(excel_path: str, sample_no: str, is_dust: bool) -> str
         excel.DisplayAlerts = False
 
         wb = excel.Workbooks.Open(excel_path, ReadOnly=True)
+        ungroup_excel_sheets(wb)
 
         sh_a = _find_sheet_name(wb, sheet_a_candidates)
         sh_b = _find_sheet_name(wb, sheet_b_candidates)
@@ -1041,6 +1566,7 @@ def _read_excel_cell_com(excel_path: str, sheet_name: str, addr: str) -> str:
     wb = None
     try:
         wb = excel.Workbooks.Open(excel_path, ReadOnly=True, UpdateLinks=0)
+        ungroup_excel_sheets(wb, sheet_name)
         try:
             ws = wb.Worksheets(sheet_name)
         except Exception:
@@ -1169,9 +1695,12 @@ def make_tab4_pdfs_water(excel_path: str, sample_no: str) -> dict:
     }
 
 
-def make_tab4_pdfs(excel_path: str, sample_no: str):
+def make_tab4_pdfs(excel_path: str, sample_no: str, *, copy_to_nas: bool = True):
+    import shutil
+
     tmp_dir = PDF_TMP_DIR
     os.makedirs(tmp_dir, exist_ok=True)
+    is_dust = is_fugitive_dust_file(excel_path)
 
     # 업로드용 원본 시트 PDF
     pdf_analy = os.path.join(tmp_dir, f"{sample_no}__대기시료채취및분석일지.pdf")
@@ -1179,6 +1708,21 @@ def make_tab4_pdfs(excel_path: str, sample_no: str):
 
     export_sheet_pdf(excel_path, "대기시료채취 및 분석일지", pdf_analy)
     export_sheet_pdf(excel_path, "대기측정기록부", pdf_record)
+
+    # 그룹웨어 부가 시트:
+    #  - 일반: 먼지시료채취기록지 (있으면)
+    #  - 비산먼지: 교정 시트 (먼지기록지 대신)
+    if is_dust:
+        pdf_extra = os.path.join(tmp_dir, f"{sample_no}__교정.pdf")
+        has_extra = export_sheet_pdf(excel_path, "교정", pdf_extra)
+    else:
+        pdf_extra = os.path.join(tmp_dir, f"{sample_no}__먼지시료채취기록지.pdf")
+        has_extra = export_sheet_pdf(excel_path, "먼지시료채취기록지", pdf_extra)
+    if not has_extra and os.path.isfile(pdf_extra):
+        try:
+            os.remove(pdf_extra)
+        except Exception:
+            pass
 
     # 커버(시험항목날짜서명) PDF
     pdf_cover = os.path.join(tmp_dir, f"{sample_no}__시험항목날짜서명.pdf")
@@ -1195,22 +1739,35 @@ def make_tab4_pdfs(excel_path: str, sample_no: str):
     # ✅ 업2는 "대기측정기록부 단독" 그대로
     upload2 = pdf_record
 
-    # 최종 병합본(3시트) = 기존 그대로
-    merge_src = [p for p in (pdf_cover, pdf_analy, pdf_record) if os.path.isfile(p)]
-    final_tmp = os.path.join(tmp_dir, f"{sample_no}__FINAL.pdf")
-    merge_pdfs(merge_src, final_tmp)
+    # 그룹웨어 첨부: 대기측정기록부 + (일반:먼지시료채취기록지 / 비산:교정)
+    gw_src = []
+    if os.path.isfile(pdf_record):
+        gw_src.append(pdf_record)
+    if has_extra and os.path.isfile(pdf_extra):
+        gw_src.append(pdf_extra)
+    pdf_groupware = os.path.join(tmp_dir, f"{sample_no}__그룹웨어.pdf")
+    if len(gw_src) >= 2:
+        merge_pdfs(gw_src, pdf_groupware)
+    elif gw_src:
+        shutil.copy2(gw_src[0], pdf_groupware)
+    else:
+        pdf_groupware = pdf_record  # fallback
 
-    # 두 경로에 복사(이 부분은 기존 유지)
-    p1, p2 = build_final_paths(excel_path, sample_no)
-    import shutil
-    shutil.copy2(final_tmp, p1)
-    shutil.copy2(final_tmp, p2)
+    p1 = p2 = final_tmp = ""
+    if copy_to_nas:
+        # 최종 병합본(3시트) → 0 5.최종완료 + 0.PDF
+        merge_src = [p for p in (pdf_cover, pdf_analy, pdf_record) if os.path.isfile(p)]
+        final_tmp = os.path.join(tmp_dir, f"{sample_no}__FINAL.pdf")
+        merge_pdfs(merge_src, final_tmp)
+        p1, p2 = build_final_paths(excel_path, sample_no)
+        shutil.copy2(final_tmp, p1)
+        shutil.copy2(final_tmp, p2)
 
-    # ✅ 리턴에서 업로드용은 upload1/upload2로
     return {
         "final_tmp": final_tmp,
         "pdf_analy": upload1,     # 업1
         "pdf_record": upload2,    # 업2
+        "pdf_groupware": pdf_groupware,  # 그룹웨어: 기록부+(먼지기록지|교정)
         "p1": p1, "p2": p2
     }
 
@@ -1620,6 +2177,7 @@ def _main_water(
     do_tab2: bool | None = None,
     do_tab4: bool | None = None,
     do_pdf_final: bool | None = None,
+    do_groupware: bool | None = None,
     raw_samples: str | None = None,
 ):
     """
@@ -1679,6 +2237,13 @@ def _main_water(
         return
 
     print(f"총 {len(items)}개 수질 시료 처리 예정", flush=True)
+
+    # ── 그룹웨어(프롬프트3): 수질 미적용 — 대기 전용 ──
+    # gw_log = GroupwareRunLog() if is_groupware_enabled(do_groupware) else None
+    # if gw_log is not None:
+    #     print("▶ 그룹웨어 연동: ON", flush=True)
+
+    tab4_status_results = []
 
     if is_cancelled(cancel_event):
         print("\n[취소됨] 사용자에 의해 작업을 중단합니다.", flush=True)
@@ -1811,6 +2376,16 @@ def _main_water(
                                     print(
                                         f"   ↳ 대행기록부 PDF → {pdfs['p_record_copy']}"
                                     )
+                                # ── 그룹웨어(프롬프트3): 수질 미적용 — 대기 전용 ──
+                                # _try_groupware_tab4_sync(
+                                #     gw_log,
+                                #     media="water",
+                                #     sample_no=sample,
+                                #     excel_path=path,
+                                #     tab4_meta=tab4_meta,
+                                #     pdf_path=pdfs.get("p_out") if pdfs else None,
+                                #     company_name=read_water_record_d3(path),
+                                # )
                             else:
                                 print("⚠ 수질 탭4 분석완료 저장 실패")
                                 site_input_ok = False
@@ -1838,10 +2413,20 @@ def _main_water(
                 back_to_list(driver)
 
         if not site_input_ok:
+            if do_tab4:
+                _record_tab4_status_result(
+                    tab4_status_results, sample, "실패", "(입력 처리 실패)"
+                )
+            try:
+                back_to_list(driver)
+            except Exception:
+                pass
             idx += 1
             continue
 
         back_to_list(driver)
+        if do_tab4:
+            _verify_and_record_tab4_list_status(driver, tab4_status_results, sample)
         idx += 1
 
     if is_cancelled(cancel_event):
@@ -1850,7 +2435,14 @@ def _main_water(
                 driver.quit()
             except Exception:
                 pass
+        if do_tab4:
+            _print_tab4_status_summary(tab4_status_results, label="수질 탭4")
         return
+
+    # export_groupware_summary(gw_log)  # 수질: 그룹웨어 미적용
+
+    if do_tab4:
+        _print_tab4_status_summary(tab4_status_results, label="수질 탭4")
 
     print("\n=== 수질 처리 완료 ===")
     gui_mode = login_id is not None
@@ -1877,6 +2469,7 @@ def _main_air(
     do_backdata: bool | None = None,
     do_tab4: bool | None = None,
     do_pdf_final: bool | None = None,
+    do_groupware: bool | None = None,
     raw_samples: str | None = None,
     team_no: str | None = None,
     date_str: str | None = None,
@@ -1975,6 +2568,12 @@ def _main_air(
         팀_표시 = ",".join(team_nos) if team_nos else "전체"
         print(f"▶ 팀({팀_표시}) 총 {len(samples)}개 시료 자동 입력 예정")
         date_groups = {date_str: samples}
+
+    gw_log = GroupwareRunLog() if is_groupware_enabled(do_groupware) else None
+    if gw_log is not None:
+        print("▶ 그룹웨어 연동: ON", flush=True)
+
+    tab4_status_results = []
 
     # 드라이버 / 로그인
     driver = None
@@ -2187,6 +2786,19 @@ def _main_air(
                             if do_pdf_final:
                                 tab4_comp_save(driver)
                                 print("✅ 탭4 입력완료")
+                                # 그룹웨어 PDF = 대기측정기록부 + 먼지시료채취기록지(있으면)
+                                _try_groupware_tab4_sync(
+                                    gw_log,
+                                    media="air",
+                                    sample_no=sample,
+                                    excel_path=path,
+                                    tab4_meta=tab4_meta,
+                                    excel_meta=excel,
+                                    pdf_path=(
+                                        pdfs.get("pdf_groupware")
+                                        or pdfs.get("pdf_record")
+                                    ) if pdfs else None,
+                                )
                             else:
                                 tab4_temp_save(driver)
                                 print("⚠ 탭4임시저장")
@@ -2210,10 +2822,22 @@ def _main_air(
                         back_to_list(driver)
 
                 if not site_input_ok:
+                    if do_tab4:
+                        _record_tab4_status_result(
+                            tab4_status_results, sample, "실패", "(입력 처리 실패)"
+                        )
+                    try:
+                        back_to_list(driver)
+                    except Exception:
+                        pass
                     idx += 1
                     continue
 
             back_to_list(driver)
+            if do_tab4 and need_detail:
+                _verify_and_record_tab4_list_status(
+                    driver, tab4_status_results, sample
+                )
             idx += 1
 
         if is_cancelled(cancel_event):
@@ -2225,19 +2849,38 @@ def _main_air(
                 driver.quit()
             except Exception:
                 pass
+        if do_tab4:
+            _print_tab4_status_summary(tab4_status_results, label="대기 탭4")
         return
 
+    export_groupware_summary(gw_log)
+    failed_gw = _print_groupware_summary(gw_log)
+
+    if do_tab4:
+        _print_tab4_status_summary(tab4_status_results, label="대기 탭4")
+
     print("\n=== 대기 처리 완료 ===", flush=True)
+
     if not gui_mode:
+        if failed_gw:
+            print(
+                f"\n⚠ 그룹웨어 실패 {len(failed_gw)}건 — 지금은 건너뜀.\n"
+                f"   나중에: 통합 런처 →「그룹웨어 전송(재전송·직접)」\n"
+                f"   (탭1: 기간 조회 재전송 / 탭2: 성적서만 직접 전송)",
+                flush=True,
+            )
         try:
             input("엔터 누르면 종료...")
         except EOFError:
             pass
 
+    return failed_gw  # GUI에서 활용
+
 
 if __name__=="__main__":
     try:
-        main()
+        with run_log("eco_input"):
+            main()
     except Exception as e:
         # 공용 에러 로그에 남기고, 원래대로 예외는 다시 올려서 콘솔/GUI에서도 확인 가능하게 유지
         log_error("eco_input.main", e)

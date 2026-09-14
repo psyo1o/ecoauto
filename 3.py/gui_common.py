@@ -12,49 +12,71 @@ from tkinter.scrolledtext import ScrolledText
 
 class QueueWriter:
     """
-    stdout/stderr를 queue로 모아 UI에 표시하는 Writer
-    
+    stdout/stderr를 queue로 모아 UI에 표시하는 Writer.
+    also(이전 stdout)가 있으면 파일 로그 tee 등으로도 같이 전달.
+
     사용 예:
         log_q = queue.Queue()
-        sys.stdout = QueueWriter(log_q)
+        sys.stdout = QueueWriter(log_q, also=sys.stdout)
     """
-    
-    def __init__(self, q: queue.Queue):
+
+    def __init__(self, q: queue.Queue, also=None):
         self.q = q
+        self.also = also
 
     def write(self, msg: str):
-        if msg:
+        if not msg:
+            return 0
+        try:
             self.q.put(msg)
+        except Exception:
+            pass
+        if self.also is not None:
+            try:
+                self.also.write(msg)
+            except Exception:
+                pass
+        return len(msg)
 
     def flush(self):
-        pass
+        if self.also is not None:
+            try:
+                self.also.flush()
+            except Exception:
+                pass
+
+    def __getattr__(self, name):
+        # encoding 등 속성 위임
+        if self.also is not None:
+            return getattr(self.also, name)
+        raise AttributeError(name)
 
 
 class LogPanel:
     """
     콘솔 로그를 표시하는 패널 위젯
-    
+
     사용 예:
         log_panel = LogPanel(parent_frame)
         log_panel.pack(fill="both", expand=True)
         log_panel.start_pumping()
     """
-    
+
     def __init__(self, parent, title="로그", height=12):
         self.parent = parent
         self.log_queue = queue.Queue()
-        
-        # stdout/stderr 리다이렉트
+
+        # stdout/stderr 리다이렉트 — 이전 스트림(4.log tee)도 유지
         self._orig_stdout = sys.stdout
         self._orig_stderr = sys.stderr
-        sys.stdout = QueueWriter(self.log_queue)
-        sys.stderr = QueueWriter(self.log_queue)
-        
+        sys.stdout = QueueWriter(self.log_queue, also=self._orig_stdout)
+        sys.stderr = QueueWriter(self.log_queue, also=self._orig_stderr)
+
         # UI 구성
         self.log_text = ScrolledText(parent, height=height)
         self.log_text.pack(fill="both", expand=True)
         self.log_text.configure(state="disabled")
-        
+
         self._pump_id = None
 
     def start_pumping(self):
@@ -170,9 +192,12 @@ def bind_text_mousewheel(text_widget, *widgets):
         w.bind("<MouseWheel>", _on_mousewheel)
 
 
-def create_scrollable_text(parent, *, width=40, height=3, **text_kwargs):
+def create_scrollable_text(
+    parent, *, width=40, height=3, horizontal: bool = False, **text_kwargs
+):
     """
     여러 줄 입력용 Text + 세로 스크롤바.
+    horizontal=True 이면 가로 스크롤바도 추가 (긴 경로 표시용).
 
     Returns:
         (frame, text_widget)
@@ -194,12 +219,23 @@ def create_scrollable_text(parent, *, width=40, height=3, **text_kwargs):
     )
     opts.update(text_kwargs)
 
-    scrollbar = ttk.Scrollbar(frame, orient="vertical")
-    text = tk.Text(frame, yscrollcommand=scrollbar.set, **opts)
-    scrollbar.config(command=text.yview)
+    yscroll = ttk.Scrollbar(frame, orient="vertical")
+    text_kw = dict(opts)
+    text_kw["yscrollcommand"] = yscroll.set
+    xscroll = None
+    if horizontal:
+        xscroll = ttk.Scrollbar(frame, orient="horizontal")
+        text_kw["xscrollcommand"] = xscroll.set
+
+    text = tk.Text(frame, **text_kw)
+    yscroll.config(command=text.yview)
+    if xscroll is not None:
+        xscroll.config(command=text.xview)
 
     text.grid(row=0, column=0, sticky="nsew")
-    scrollbar.grid(row=0, column=1, sticky="ns")
+    yscroll.grid(row=0, column=1, sticky="ns")
+    if xscroll is not None:
+        xscroll.grid(row=1, column=0, sticky="ew")
     bind_text_mousewheel(text, frame)
 
     return frame, text

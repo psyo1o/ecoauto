@@ -158,6 +158,13 @@ def read_review_summary_one(review_path: str) -> pd.DataFrame:
         if col not in df.columns:
             raise ValueError(f"검토파일 '요약' 시트에 '{col}' 컬럼이 없습니다. ({os.path.basename(review_path)})")
 
+    # eco_check 요약 하단 '현장사진 미리보기' 구간은 대시보드 집계에서 제외
+    sn_s = df["시료번호"].astype(str).str.strip()
+    marker = sn_s == "현장사진 미리보기"
+    if marker.any():
+        cut_i = int(marker.to_numpy().argmax())
+        df = df.iloc[:cut_i].copy()
+
     # 사이트값/엑셀값 컬럼은 있을 수도/없을 수도 있음
     if "사이트값" not in df.columns:
         df["사이트값"] = None
@@ -167,16 +174,46 @@ def read_review_summary_one(review_path: str) -> pd.DataFrame:
     df["비교"] = df["비교"].astype(str).str.replace("확인 불가", "확인불가")
     df["시료번호"] = df["시료번호"].astype(str)
     df["항목"] = df["항목"].astype(str)
+    # 미리보기/링크 잔여행 방어 (PDF 열기·현장사진 미리보기 행)
+    df = df[~df["항목"].str.startswith("PIC", na=False)].copy()
+    df = df[~df["항목"].isin(["PDF 열기", "현장사진", "현장사진 미리보기"])].copy()
+    df = df[df["시료번호"].str.match(r"^A\d{7}-\d{2}", na=False)].copy()
     return df
 
 
 def _agg_compare(series: pd.Series) -> str:
-    s = series.astype(str).tolist()
+    s = [str(x).strip() for x in series.tolist()]
+    # 구버전 eco_check 현장사진 표기 호환
+    s = ["NG" if x in ("없음", "파일없음") else x for x in s]
     if any(x == "NG" for x in s):
         return "NG"
     if any(x == "확인불가" for x in s):
         return "확인불가"
     return "OK"
+
+
+def _photo_status_from_group(g: pd.DataFrame) -> str:
+    """현장사진1~3 유무 종합. 구버전(항목 없음)=확인불가."""
+    items = g["항목"].astype(str)
+    photo = g[items.str.match(r"^현장사진[1-3]$", na=False)].copy()
+    if photo.empty:
+        return "확인불가"
+    cmps = []
+    for v in photo["비교"].tolist():
+        s = str(v).strip()
+        if s in ("없음", "파일없음"):
+            s = "NG"
+        cmps.append(s)
+    if any(c == "NG" for c in cmps):
+        return "NG"
+    # 3장 미만이면 미완으로 NG
+    if len(photo) < 3:
+        return "NG"
+    if all(c == "OK" for c in cmps):
+        return "OK"
+    if any(c == "확인불가" for c in cmps):
+        return "확인불가"
+    return "NG"
 
 
 def read_review_summary_multi(review_paths: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -195,6 +232,14 @@ def read_review_summary_multi(review_paths: List[str]) -> Tuple[pd.DataFrame, pd
 
     if df_all.empty:
         raise ValueError("검토 파일(요약)에서 읽어온 데이터가 없습니다.")
+
+    # 현장사진 유무: 없음/파일없음 → NG
+    item_s = df_all["항목"].astype(str)
+    cmp_s = df_all["비교"].astype(str).str.strip()
+    photo_mask = item_s.str.match(r"^현장사진[1-3]$", na=False)
+    bad_photo = photo_mask & cmp_s.isin(["없음", "파일없음", "", "nan", "None"])
+    if bad_photo.any():
+        df_all.loc[bad_photo, "비교"] = "NG"
 
     # (시료번호, 항목) 단위로 통합(팀별 파일이 여러개여도 1줄로)
     def first_nonnull(x: pd.Series):
@@ -223,16 +268,23 @@ def read_review_summary_multi(review_paths: List[str]) -> Tuple[pd.DataFrame, pd
         ok_cnt = int(vc.get("OK", 0))
         ng_cnt = int(vc.get("NG", 0))
         unk_cnt = int(vc.get("확인불가", 0))
-        overall = "NG" if ng_cnt > 0 else ("WARN" if unk_cnt > 0 else "OK")
+        photo_st = _photo_status_from_group(g)
+        # 현장사진 NG면 검토 종합에도 반영
+        if photo_st == "NG":
+            ng_cnt = max(ng_cnt, 1)
+        overall = "NG" if ng_cnt > 0 else ("WARN" if unk_cnt > 0 or photo_st == "확인불가" else "OK")
 
         ng_items = g.loc[g["비교"] == "NG", "항목"].dropna().astype(str).tolist()
         unk_items = g.loc[g["비교"] == "확인불가", "항목"].dropna().astype(str).tolist()
+        if photo_st == "NG" and not any(str(x).startswith("현장사진") for x in ng_items):
+            ng_items = ["현장사진"] + ng_items
 
         summary_rows.append({
             "시료번호": sn,
             "검토_OK": ok_cnt,
             "검토_NG": ng_cnt,
             "검토_확인불가": unk_cnt,
+            "현장사진상태": photo_st,
             "검토_종합": overall,
             "NG_항목(상위10)": ", ".join(ng_items[:10]),
             "확인불가_항목(상위10)": ", ".join(unk_items[:10]),
@@ -537,6 +589,9 @@ def build_dashboard(send_df: pd.DataFrame,
         ["최종 OK", int((detail["최종_종합"] == "OK").sum())],
         ["최종 WARN", int((detail["최종_종합"] == "WARN").sum())],
         ["최종 NG", int((detail["최종_종합"] == "NG").sum())],
+        ["현장사진 OK", int((detail.get("현장사진상태", pd.Series(dtype=str)) == "OK").sum()) if "현장사진상태" in detail.columns else 0],
+        ["현장사진 NG", int((detail.get("현장사진상태", pd.Series(dtype=str)) == "NG").sum()) if "현장사진상태" in detail.columns else 0],
+        ["현장사진 확인불가", int((detail.get("현장사진상태", pd.Series(dtype=str)) == "확인불가").sum()) if "현장사진상태" in detail.columns else 0],
         ["장비중복 NG", int((detail["장비중복"] == "NG").sum())],
         ["인력중복 NG", int((detail["인력중복"] == "NG").sum())],
         ["차량중복 NG", int((detail["차량중복"] == "NG").sum())],
@@ -556,6 +611,7 @@ def build_dashboard(send_df: pd.DataFrame,
 
     causes: Dict[str, pd.DataFrame] = {
         "검토_NG항목": review_ng_causes,
+        "현장사진상태": _vc_table(_safe_series(detail, "현장사진상태"), "현장사진상태"),
         "THC상태": _vc_table(_safe_series(send_df, "THC상태"), "THC상태"),
         "수분상태": _vc_table(_safe_series(send_df, "수분상태"), "수분상태"),
         "성적서상태": _vc_table(_safe_series(send_df, "성적서상태"), "성적서상태"),
@@ -914,7 +970,9 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        from log_utils import run_log
+        with run_log("dash"):
+            main()
     except Exception as e:
         log_error("dash.main", e)
         raise

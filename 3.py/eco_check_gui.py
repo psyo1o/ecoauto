@@ -255,8 +255,10 @@ class EcoCheckGUI:
 
 def main():
     """메인 함수"""
-    app = EcoCheckGUI()
-    app.run()
+    from log_utils import run_log
+    with run_log("eco_check_gui"):
+        app = EcoCheckGUI()
+        app.run()
 
 
 if __name__ == "__main__":
