@@ -214,9 +214,10 @@ def get_samples_current_page(driver, prefix: str = "A") -> list:
     return list(dict.fromkeys(arr))
 
 
-# 탭4 입력완료 후 목록 RealGrid '상태' 열 확인용
+# 목록 RealGrid '상태' 열 확인용
 # 목록 그리드: [시료번호] … 오른쪽 두 번째 열 = [상태]
 TAB4_LIST_SUCCESS_STATUS = "측정분석결과 입력완료"
+TAB2_LIST_SUCCESS_STATUS = "측정분석결과 입력중"
 TAB4_LIST_STATUS_OFFSET = 2  # 시료번호 열에서 오른쪽으로 몇 칸
 
 
@@ -224,11 +225,15 @@ def _norm_status_text(s: str) -> str:
     return re.sub(r"\s+", "", (s or "").replace("*", "").strip())
 
 
-def _is_tab4_success_status(status: str, success_text: str = TAB4_LIST_SUCCESS_STATUS) -> bool:
+def _is_list_success_status(status: str, success_text: str) -> bool:
     if not status:
         return False
     a, b = _norm_status_text(status), _norm_status_text(success_text)
     return a == b or b in a
+
+
+def _is_tab4_success_status(status: str, success_text: str = TAB4_LIST_SUCCESS_STATUS) -> bool:
+    return _is_list_success_status(status, success_text)
 
 
 def _read_list_row_status(driver, sample_no: str) -> str | None:
@@ -380,9 +385,21 @@ def verify_tab4_list_status(
     if str(status).strip() == "":
         return "확인불가", "(상태 열 비어있음)"
 
-    if _is_tab4_success_status(status, success_text):
+    if _is_list_success_status(status, success_text):
         return "성공", status
     return "실패", status
+
+
+def verify_tab2_list_status(
+    driver,
+    sample_no: str,
+    search_box: str = "#search_meas_mgmt_no",
+    success_text: str = TAB2_LIST_SUCCESS_STATUS,
+) -> tuple[str, str]:
+    """탭2 PDF/입력완료 후 목록 상태 확인. 기대값: 측정분석결과 입력중."""
+    return verify_tab4_list_status(
+        driver, sample_no, search_box=search_box, success_text=success_text
+    )
 
 
 # 시료 상세 진입 실패 시 — 목록 복귀 후 시료번호 검색부터 재시도 (eco_input / eco_check 공통)

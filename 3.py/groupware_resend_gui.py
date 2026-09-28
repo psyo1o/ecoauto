@@ -189,9 +189,10 @@ class GroupwareResendGUI:
         hint = ttk.Label(
             parent,
             text="전송로그에서 실패·시설 soft·대기·PDF 없음 건을 모아 재시도합니다. "
-            "PDF는 임시 생성 후 API로만 올리고, 0 5.최종완료·0.PDF에는 넣지 않습니다.",
+            "성공 건 포함을 켜면 기간 내 이미 올라간 시료도 로그의 원본엑셀로 "
+            "단위·배출허용기준만 다시 보냅니다(PDF 안 만듦, 파일 추가 불필요).",
             foreground="gray",
-            wraplength=640,
+            wraplength=900,
         )
         hint.grid(row=0, column=0, sticky="w", pady=(0, 4))
 
@@ -224,6 +225,13 @@ class GroupwareResendGUI:
         ttk.Checkbutton(
             top, text="PDF 없음 포함", variable=self.pdf_missing_var
         ).grid(row=0, column=5, padx=4)
+
+        self.ok_boost_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            top,
+            text="성공 건 포함 (단위·기준치 보강, PDF 생략)",
+            variable=self.ok_boost_var,
+        ).grid(row=1, column=1, columnspan=5, sticky="w", pady=(6, 0))
 
         self.btn_scan = ttk.Button(top, text="대상 조회", command=self._on_scan)
         self.btn_scan.grid(row=0, column=6, padx=4)
@@ -322,7 +330,7 @@ class GroupwareResendGUI:
         self.btn_resend_all.pack(side="left")
         ttk.Label(
             action,
-            text="성공하면 로그에 '완료' 기록 → 다음 조회에서 빠짐",
+            text="원본엑셀이 있으면 파일 추가 없이 전송. 보강 성공 건은 다음 조회에서 빠짐",
             foreground="gray",
         ).pack(side="left", padx=12)
 
@@ -525,6 +533,7 @@ class GroupwareResendGUI:
         d1 = self.entry_to.get().strip()
         soft = bool(self.soft_var.get())
         pdf_missing = bool(self.pdf_missing_var.get())
+        include_ok = bool(self.ok_boost_var.get())
 
         self.btn_scan.config(state="disabled")
         self._busy = True
@@ -532,7 +541,8 @@ class GroupwareResendGUI:
         print(
             f"▶ 대상 조회 중... {d0} ~ {d1} "
             f"(시설 soft={'포함' if soft else '제외'}, "
-            f"PDF없음={'포함' if pdf_missing else '제외'})"
+            f"PDF없음={'포함' if pdf_missing else '제외'}, "
+            f"성공보강={'포함' if include_ok else '제외'})"
         )
 
         def worker():
@@ -550,6 +560,7 @@ class GroupwareResendGUI:
                     d1,
                     include_facility_soft=soft,
                     include_pdf_missing=pdf_missing,
+                    include_ok=include_ok,
                 )
                 self.pending = pending
                 self.root.after(0, lambda: self._fill_tree(pending))
@@ -581,14 +592,25 @@ class GroupwareResendGUI:
         n = len(self.pending or [])
         self._reset_progress(f"조회 완료 · 대상 {n}건" if n else "조회 완료 · 대상 없음")
 
+    def _excel_ready(self, p: dict) -> bool:
+        sno = p.get("sample_no") or ""
+        if sno in self.report_paths and os.path.isfile(self.report_paths[sno]):
+            return True
+        src = (p.get("source_excel") or "").strip()
+        return bool(src and os.path.isfile(src))
+
     def _fill_tree(self, pending: list[dict]):
         self.tree.delete(*self.tree.get_children())
+        ready_n = 0
         for p in pending:
             sno = p.get("sample_no", "")
             sent_co = (p.get("company_name") or "").strip()
             api_co = (p.get("api_matched_company") or "").strip()
             if not api_co:
                 api_co = "—"
+            ready = self._excel_ready(p)
+            if ready:
+                ready_n += 1
             self.tree.insert(
                 "",
                 "end",
@@ -600,11 +622,13 @@ class GroupwareResendGUI:
                     p.get("reason", ""),
                     p.get("facility_name", ""),
                     os.path.basename(p.get("log_path") or ""),
-                    "O" if sno in self.report_paths else "X",
+                    "O" if ready else "X",
                 ),
             )
-        self.lbl_count.config(text=f"대상 {len(pending)}건")
-        print(f"✅ 조회 완료: {len(pending)}건")
+        self.lbl_count.config(
+            text=f"대상 {len(pending)}건 · 원본엑셀 {ready_n}건"
+        )
+        print(f"✅ 조회 완료: {len(pending)}건 (원본엑셀 있음 {ready_n}건)")
 
     def _selected_targets(self) -> list[dict]:
         ids = self.tree.selection()
@@ -614,7 +638,7 @@ class GroupwareResendGUI:
         return [by[i] for i in ids if i in by]
 
     def _matched_targets(self) -> list[dict]:
-        return [p for p in self.pending if p.get("sample_no") in self.report_paths]
+        return [p for p in self.pending if self._excel_ready(p)]
 
     # ── 탭1 스킵 / 재전송 ──
     def _on_skip_selected(self):
@@ -661,7 +685,8 @@ class GroupwareResendGUI:
         if not targets:
             messagebox.showinfo(
                 "재전송",
-                "성적서가 매칭된 대상이 없습니다.\n먼저 성적서 엑셀을 추가하세요.",
+                "원본엑셀이 있는 대상이 없습니다.\n"
+                "로그의 원본엑셀 경로가 없거나 파일이 이동된 경우, 오른쪽에서 성적서를 추가하세요.",
                 parent=self.root,
             )
             return
@@ -699,9 +724,9 @@ class GroupwareResendGUI:
 
         if not messagebox.askyesno(
             "재전송 확인",
-            f"{len(targets)}건을 그룹웨어에 재전송할까요?\n"
-            "(eco_input과 동일: PDF 생성 + 데이터·PDF 전송)\n"
-            "성공 건은 로그에 '완료'로 남고 다음 조회에서 빠집니다.",
+            f"{len(targets)}건을 그룹웨어에 보낼까요?\n"
+            "· 실패/PDF 없음: PDF 생성 + 데이터 전송\n"
+            "· 단위·기준 보강: 데이터만 (PDF 안 만듦, 로그 원본엑셀 사용)",
             parent=self.root,
         ):
             return

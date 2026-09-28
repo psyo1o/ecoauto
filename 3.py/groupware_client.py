@@ -1285,10 +1285,12 @@ def _classify_sample_resend_need(
     *,
     include_facility_soft: bool,
     include_pdf_missing: bool = True,
+    include_ok: bool = False,
 ) -> str:
     """
     재전송 사유 문자열. 불필요하면 빈 문자열.
     스킵은 제외. PDF 없음/실패는 재전송상태=완료여도 포함.
+    include_ok=True 이면 데이터 성공 건도 '단위·기준 보강'으로 포함 (PDF 생략 재전송용).
     """
     st = (s.get("resend_status") or "").strip()
     if st == RESEND_STATUS_SKIP:
@@ -1300,12 +1302,14 @@ def _classify_sample_resend_need(
     pdf_fail = pdf_attempted and (not pdf_ok)
 
     # 재전송 완료면 예전 로그의 데이터전송=FAIL 은 무시.
-    # PDF 없음/실패만 다시 대상으로 남긴다.
+    # PDF 없음/실패만 다시 대상으로 남긴다. (include_ok 시 성공 건 보강도 포함)
     if st == RESEND_STATUS_DONE:
         if pdf_fail:
             return "PDF FAIL"
         if include_pdf_missing and pdf_missing:
             return "PDF 없음"
+        if include_ok and s.get("data_ok"):
+            return "단위·기준 보강"
         return ""
 
     if not s.get("data_ok"):
@@ -1325,7 +1329,14 @@ def _classify_sample_resend_need(
         return "시설 soft"
     if st == RESEND_STATUS_PENDING:
         return "대기"
+    if include_ok and s.get("data_ok"):
+        return "단위·기준 보강"
     return ""
+
+
+def _is_ok_boost_reason(reason: str) -> bool:
+    """성공 건 단위·기준 보강(데이터만) 사유인지."""
+    return "보강" in (reason or "")
 
 
 def _parse_log_stamp_from_name(path: str) -> datetime | None:
@@ -1481,11 +1492,13 @@ def collect_pending_resends(
     *,
     include_facility_soft: bool = True,
     include_pdf_missing: bool = True,
+    include_ok: bool = False,
     base_dir: str | None = None,
 ) -> list[dict]:
     """
     기간 내 전송 로그를 모아 재전송 대상(아직 완료/스킵 아닌 건)을 반환.
     PDF 없음(N/A)·PDF FAIL 은 재전송상태=완료여도 포함.
+    include_ok=True 이면 데이터 성공 건도 '단위·기준 보강'으로 포함.
     동일 시료가 여러 로그에 있으면 **최신 로그** 기준.
     """
     files = list_groupware_log_files(date_from, date_to, base_dir=base_dir)
@@ -1501,9 +1514,11 @@ def collect_pending_resends(
                 s,
                 include_facility_soft=include_facility_soft,
                 include_pdf_missing=include_pdf_missing,
+                include_ok=include_ok,
             )
             if not reason:
                 # 시간순 처리: 이후(또는 현재) 로그가 성공·완료면 이전 대기 건 제외
+                # (include_ok 가 아니면 성공 건은 사유 없음 → 제거)
                 latest.pop(sno, None)
                 continue
             s["reason"] = reason
@@ -1519,7 +1534,8 @@ def collect_pending_resends(
         f"▶ 재전송 대상 조회: {len(out)}건 "
         f"(로그파일 {len(files)}개, "
         f"soft={'포함' if include_facility_soft else '제외'}, "
-        f"PDF없음={'포함' if include_pdf_missing else '제외'})"
+        f"PDF없음={'포함' if include_pdf_missing else '제외'}, "
+        f"성공보강={'포함' if include_ok else '제외'})"
     )
     return out
 
@@ -1703,6 +1719,57 @@ def _sync_excel_with_pdf(sno: str, src: str, gw_log: GroupwareRunLog) -> dict:
     }
 
 
+
+def _sync_excel_data_only(sno: str, src: str, gw_log: GroupwareRunLog) -> dict:
+    """
+    성적서 1건 — 데이터만 전송 (PDF 생성·첨부 생략).
+    단위·배출허용기준 보강 재전송용.
+    """
+    from eco_input import _try_groupware_tab4_sync
+
+    try:
+        print(f"  → {sno}: 데이터만 전송 (PDF 생략) — {os.path.basename(src)}")
+        _try_groupware_tab4_sync(
+            gw_log,
+            media="air",
+            sample_no=sno,
+            excel_path=src,
+            tab4_meta=None,
+            excel_meta=None,
+            pdf_path=None,
+        )
+    except Exception as e:
+        print(f"  ❌ {sno}: 데이터 전송 오류 — {e}")
+        log_error("groupware.sync_excel_data_only", e)
+        return {
+            "sample_no": sno, "ok": False, "soft_only": False,
+            "error": str(e), "warnings": [], "verify_key": "",
+            "source_excel": src, "data_ok": False, "pdf_ok": False,
+            "pdf_skipped": True,
+        }
+
+    r = (gw_log._results or {}).get(sno) or {}
+    warns = r.get("warnings") or []
+    soft = _soft_facility_warnings(warns)
+    hard = _has_critical_field_warnings(warns)
+    data_ok = bool(r.get("data_ok"))
+    pipeline_ok = data_ok and not hard
+    soft_only = pipeline_ok and bool(soft)
+    ok = pipeline_ok and not soft
+    return {
+        "sample_no": sno,
+        "ok": ok,
+        "soft_only": soft_only,
+        "error": r.get("error", ""),
+        "warnings": warns,
+        "verify_key": r.get("verify_key", ""),
+        "source_excel": src,
+        "data_ok": data_ok,
+        "pdf_ok": bool(r.get("pdf_ok")),
+        "pdf_skipped": True,
+    }
+
+
 def send_from_report_excels(
     paths: list[str],
     *,
@@ -1773,7 +1840,7 @@ def resend_pending_batch(
         return []
 
     total = len(targets)
-    print(f"▶ 그룹웨어 기간 재전송 시작 ({total}건) — 데이터+PDF (eco_input과 동일)")
+    print(f"▶ 그룹웨어 기간 재전송 시작 ({total}건) — 실패건 PDF포함 / 보강건 데이터만")
     gw_log = GroupwareRunLog()
     results = []
     for i, t in enumerate(targets, start=1):
@@ -1795,22 +1862,31 @@ def resend_pending_batch(
             })
             continue
 
-        print(f"  → {sno} 재전송... excel={os.path.basename(src)}")
-        row = _sync_excel_with_pdf(sno, src, gw_log)
+        reason = t.get("reason") or ""
+        boost = _is_ok_boost_reason(reason)
+        mode = "데이터만(보강)" if boost else "데이터+PDF"
+        print(f"  → {sno} 재전송 [{reason or '-'}] {mode}... excel={os.path.basename(src)}")
+        if boost:
+            row = _sync_excel_data_only(sno, src, gw_log)
+        else:
+            row = _sync_excel_with_pdf(sno, src, gw_log)
         row["log_path"] = log_path
+        row["reason"] = reason
         ok = bool(row.get("ok"))
         soft_ok_data = bool(row.get("soft_only"))
 
         if ok:
+            pdf_note = "생략" if row.get("pdf_skipped") else ("OK" if row.get("pdf_ok") else "없음")
             print(
                 f"  ✅ {sno}: 재전송 성공 verify_key={row.get('verify_key','')}"
-                f" pdf={'OK' if row.get('pdf_ok') else '없음'}"
+                f" pdf={pdf_note}"
             )
             if mark_done and log_path:
                 n = mark_resend_status_in_log(
                     log_path, [sno], RESEND_STATUS_DONE,
-                    note_append=f"재전송완료 {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-                    pdf_status="OK" if row.get("pdf_ok") else None,
+                    note_append=f"재전송완료 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                    + (" [단위·기준보강]" if boost else ""),
+                    pdf_status=("OK" if row.get("pdf_ok") else None) if not boost else None,
                     data_status="OK" if row.get("data_ok") else None,
                 )
                 print(f"     ↳ 로그 갱신({n}행): {os.path.basename(log_path)} → {RESEND_STATUS_DONE}")

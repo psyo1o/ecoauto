@@ -69,6 +69,7 @@ from measin_utils import (
     collect_samples_from_files,
     verify_tab4_list_status,
     TAB4_LIST_SUCCESS_STATUS,
+    TAB2_LIST_SUCCESS_STATUS,
     LOGIN_URL, FIELD_URL, NAS_BASE, NAS_DIRS
 )
 from format_utils import (
@@ -439,61 +440,131 @@ def back_to_list(d, btn_selector="#btnMsFieldDocCancel"):
     return result
 
 
+def _record_list_status_result(
+    results: list,
+    sample: str,
+    result: str,
+    status_text: str = "",
+    *,
+    label: str = "탭4",
+    success_text: str = "",
+    note: str = "",
+):
+    """목록 상태 확인 결과 누적 + 즉시 로그."""
+    results.append({
+        "sample": sample,
+        "result": result,
+        "status": status_text or "",
+        "note": note or "",
+    })
+    expect = success_text or (
+        TAB4_LIST_SUCCESS_STATUS if "탭4" in label else TAB2_LIST_SUCCESS_STATUS
+    )
+    if result == "성공":
+        print(f"✅ {label} 상태확인 성공: {sample} (목록상태='{status_text or expect}')")
+    else:
+        # 실패·확인불가 → 경고. 목록 실제 문구를 우선 표시
+        st = (status_text or "").strip() or "(목록상태 확인불가)"
+        extra = f"  ({note})" if note else ""
+        mark = "⚠" if result == "확인불가" else "❌"
+        print(f"{mark} {label} 상태확인 경고: {sample} → 목록상태='{st}'{extra}")
+
+
 def _record_tab4_status_result(
     results: list,
     sample: str,
     result: str,
     status_text: str = "",
 ):
-    """탭4 목록 상태 확인 결과 누적 + 즉시 로그."""
-    results.append({"sample": sample, "result": result, "status": status_text or ""})
-    if result == "성공":
-        print(f"✅ 탭4 상태확인 성공: {sample} ({status_text or TAB4_LIST_SUCCESS_STATUS})")
-    elif result == "실패":
-        detail = status_text or "(상태 문구 불일치/처리실패)"
-        print(f"❌ 탭4 상태확인 실패: {sample} → {detail}")
-    else:
-        detail = f" ({status_text})" if status_text else ""
-        print(f"⚠ 탭4 상태확인 확인불가: {sample}{detail}")
+    """하위 호환 — 탭4 상태 기록."""
+    _record_list_status_result(
+        results,
+        sample,
+        result,
+        status_text,
+        label="탭4",
+        success_text=TAB4_LIST_SUCCESS_STATUS,
+    )
+
+
+def _verify_and_record_list_status(
+    driver,
+    results: list,
+    sample: str,
+    *,
+    success_text: str,
+    label: str,
+    note: str = "",
+):
+    """목록 복귀 후 RealGrid '상태' 열 확인 → results에 기록."""
+    try:
+        result, status_text = verify_tab4_list_status(
+            driver, sample, success_text=success_text
+        )
+    except Exception as e:
+        result, status_text = "확인불가", f"(예외: {e})"
+    _record_list_status_result(
+        results,
+        sample,
+        result,
+        status_text,
+        label=label,
+        success_text=success_text,
+        note=note,
+    )
 
 
 def _verify_and_record_tab4_list_status(driver, results: list, sample: str):
     """목록 복귀 후 RealGrid '상태' 열 확인 → results에 기록."""
-    try:
-        result, status_text = verify_tab4_list_status(driver, sample)
-    except Exception as e:
-        result, status_text = "확인불가", f"(예외: {e})"
-    _record_tab4_status_result(results, sample, result, status_text)
+    _verify_and_record_list_status(
+        driver,
+        results,
+        sample,
+        success_text=TAB4_LIST_SUCCESS_STATUS,
+        label="탭4",
+    )
 
 
-def _print_tab4_status_summary(results: list, label: str = "탭4"):
-    """시료별 성공/실패/확인불가 최종 요약."""
+def _print_list_status_summary(
+    results: list,
+    label: str = "탭4",
+    success_text: str = TAB4_LIST_SUCCESS_STATUS,
+):
+    """시료별 성공/경고 최종 요약 (실패·확인불가 → 경고)."""
     if not results:
         return
     ok = [r for r in results if r["result"] == "성공"]
-    ng = [r for r in results if r["result"] == "실패"]
-    unk = [r for r in results if r["result"] == "확인불가"]
+    warn = [r for r in results if r["result"] != "성공"]
 
     print(f"\n{'='*51}")
     print(f"=== {label} 입력 결과 요약 (목록 '상태' 열) ===")
-    print(f"  성공 {len(ok)} / 실패 {len(ng)} / 확인불가 {len(unk)}  (총 {len(results)})")
-    print(f"  성공 기준: '{TAB4_LIST_SUCCESS_STATUS}'")
+    print(f"  성공 {len(ok)} / 경고 {len(warn)}  (총 {len(results)})")
+    print(f"  성공 기준: '{success_text}'")
     if ok:
         print("  ✅ 성공:")
         for r in ok:
-            print(f"     - {r['sample']}")
-    if ng:
-        print("  ❌ 실패:")
-        for r in ng:
-            detail = r["status"] or "(입력 처리 실패)"
-            print(f"     - {r['sample']}  [{detail}]")
-    if unk:
-        print("  ⚠ 확인불가:")
-        for r in unk:
-            detail = f" → {r['status']}" if r.get("status") else ""
-            print(f"     - {r['sample']}{detail}")
+            st = (r.get("status") or "").strip()
+            if st:
+                print(f"     - {r['sample']}  (목록상태='{st}')")
+            else:
+                print(f"     - {r['sample']}")
+    if warn:
+        print("  ⚠ 경고:")
+        for r in warn:
+            st = (r.get("status") or "").strip() or "(목록상태 확인불가)"
+            note = (r.get("note") or "").strip()
+            line = f"     - {r['sample']}  목록상태='{st}'"
+            if note:
+                line += f"  ({note})"
+            print(line)
     print(f"{'='*51}")
 
+
+def _print_tab4_status_summary(results: list, label: str = "탭4"):
+    """하위 호환 — 탭4 요약."""
+    _print_list_status_summary(
+        results, label=label, success_text=TAB4_LIST_SUCCESS_STATUS
+    )
 
 def _print_groupware_summary(gw_log) -> list[dict]:
     """그룹웨어 전송 결과 요약 출력. hard 실패 목록을 반환 (재전송 대상)."""
@@ -2574,6 +2645,7 @@ def _main_air(
         print("▶ 그룹웨어 연동: ON", flush=True)
 
     tab4_status_results = []
+    tab2_status_results = []
 
     # 드라이버 / 로그인
     driver = None
@@ -2691,6 +2763,8 @@ def _main_air(
                         break
 
                     site_input_ok = True
+                    tab2_status_check_needed = False
+                    tab2_save_note = ""
                     try:
                         if do_tab1 and not site_tab2_done:
                             safe_click(driver, "#ui-id-1")
@@ -2758,10 +2832,46 @@ def _main_air(
                             else:
                                 site_input_ok = False
                                 print("⚠ 탭2 저장 미완료 → 시료 검색부터 재시도")
+
+                            # 탭2 PDF 저장 후 목록 상태 확인 (임시저장이어도 실제 문구 읽음)
+                            # 기대값 '측정분석결과 입력중'
+                            tab2_save_note = ""
+                            if do_pdf_upload and ok and did_pdf:
+                                tab2_status_check_needed = True
+                                if not use_final_save:
+                                    tab2_save_note = "탭2 임시저장"
+                            elif do_pdf_upload and not did_pdf:
+                                # PDF 실패여도 목록 실제 상태는 읽어 둠
+                                tab2_status_check_needed = True
+                                tab2_save_note = "PDF 업로드 실패"
+                                site_input_ok = False
                         elif do_tab2 and site_tab2_done:
                             print("▶ 탭2 스킵(이미 처리됨)")
                         else:
                             print("▶ 탭2 스킵")
+
+                        # 탭2 PDF 직후 → 목록 상태 확인. 탭4 이어가면 상세 재진입
+                        if tab2_status_check_needed:
+                            back_to_list(driver)
+                            _verify_and_record_list_status(
+                                driver,
+                                tab2_status_results,
+                                sample,
+                                success_text=TAB2_LIST_SUCCESS_STATUS,
+                                label="탭2",
+                                note=tab2_save_note,
+                            )
+                            if do_tab4 and site_input_ok:
+                                opened = reopen_sample_from_search(
+                                    driver,
+                                    sample,
+                                    login_id=login_id,
+                                    login_pw=login_pw,
+                                    date_str=date_str,
+                                )
+                                if not opened or not ensure_detail_page_for_tab1(driver):
+                                    site_input_ok = False
+                                    print("⚠ 탭2 상태확인 후 상세 재진입 실패")
 
                         if do_tab4 and site_input_ok:
                             safe_click(driver, TAB4_SELECTOR)
@@ -2826,6 +2936,30 @@ def _main_air(
                         _record_tab4_status_result(
                             tab4_status_results, sample, "실패", "(입력 처리 실패)"
                         )
+                    if do_tab2 and do_pdf_upload and not any(
+                        r.get("sample") == sample for r in tab2_status_results
+                    ):
+                        # 가능하면 목록 실제 상태 문구를 읽어 경고에 표시
+                        try:
+                            back_to_list(driver)
+                            _verify_and_record_list_status(
+                                driver,
+                                tab2_status_results,
+                                sample,
+                                success_text=TAB2_LIST_SUCCESS_STATUS,
+                                label="탭2",
+                                note="입력 처리 실패",
+                            )
+                        except Exception:
+                            _record_list_status_result(
+                                tab2_status_results,
+                                sample,
+                                "실패",
+                                "(목록상태 확인불가)",
+                                label="탭2",
+                                success_text=TAB2_LIST_SUCCESS_STATUS,
+                                note="입력 처리 실패",
+                            )
                     try:
                         back_to_list(driver)
                     except Exception:
@@ -2849,6 +2983,12 @@ def _main_air(
                 driver.quit()
             except Exception:
                 pass
+        if tab2_status_results:
+            _print_list_status_summary(
+                tab2_status_results,
+                label="대기 탭2 PDF",
+                success_text=TAB2_LIST_SUCCESS_STATUS,
+            )
         if do_tab4:
             _print_tab4_status_summary(tab4_status_results, label="대기 탭4")
         return
@@ -2856,6 +2996,12 @@ def _main_air(
     export_groupware_summary(gw_log)
     failed_gw = _print_groupware_summary(gw_log)
 
+    if tab2_status_results:
+        _print_list_status_summary(
+            tab2_status_results,
+            label="대기 탭2 PDF",
+            success_text=TAB2_LIST_SUCCESS_STATUS,
+        )
     if do_tab4:
         _print_tab4_status_summary(tab4_status_results, label="대기 탭4")
 

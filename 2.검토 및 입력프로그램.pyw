@@ -3,20 +3,208 @@
 통합 마스터 런처 (2.검토 및 입력프로그램.pyw)
 NAS UNC 경로에서 더블 클릭 실행 · 콘솔 창 없음 · 하위 GUI 무창 실행
 
-시작 시 필수 Python 패키지를 검사하고, 없으면 안내 창 → pip 설치 → 재시작한다.
-패키지 목록: `0.처음사용시/requirements.txt`
+이 파일은 무조건 Python 3.11 로 실행된다.
+(.pyw → pyw.exe 기본이 3.14여도 시작 직후 3.11로 전환)
+
+필수 패키지: `0.처음사용시/requirements.txt`
 """
 
-import importlib.util
+# ---------------------------------------------------------------------------
+# Python 3.11 고정 — 다른 import 보다 먼저 (3.14 pyw 더블클릭 대응)
+# ---------------------------------------------------------------------------
 import os
 import sys
 import subprocess
+
+PREFERRED_PY = (3, 11)
+_REEXEC_ENV = "MEASIN_LAUNCHER_PY_REEXEC"
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+
+def _script_path_early():
+    try:
+        return os.path.abspath(__file__)
+    except NameError:
+        pass
+    if sys.argv and sys.argv[0]:
+        return os.path.abspath(sys.argv[0])
+    return ""
+
+
+def _find_py311_exes():
+    """(pythonw.exe, python.exe) 후보 경로 목록."""
+    roots = []
+    forced = (os.environ.get("MEASIN_PYTHON") or "").strip().strip('"')
+    if forced:
+        roots.append(os.path.dirname(forced) if os.path.isfile(forced) else forced)
+
+    for base in (
+        os.environ.get("PROGRAMFILES", r"C:\Program Files"),
+        os.environ.get("LOCALAPPDATA", ""),
+        r"C:\Program Files",
+        r"C:\Python311",
+    ):
+        if not base:
+            continue
+        roots.append(os.path.join(base, "Python311"))
+        roots.append(os.path.join(base, "Programs", "Python", "Python311"))
+    roots.append(r"C:\Program Files\Python311")
+
+    # py -3.11 → 실제 설치 경로
+    try:
+        r = subprocess.run(
+            ["py", "-3.11", "-c", "import sys; print(sys.executable)"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            creationflags=_CREATE_NO_WINDOW,
+        )
+        if r.returncode == 0:
+            exe = (r.stdout or "").strip().splitlines()[-1].strip()
+            if exe and os.path.isfile(exe):
+                roots.insert(0, os.path.dirname(exe))
+    except Exception:
+        pass
+
+    seen = set()
+    out_w, out_c = [], []
+    for root in roots:
+        if not root:
+            continue
+        key = os.path.normcase(os.path.normpath(root))
+        if key in seen:
+            continue
+        seen.add(key)
+        w = os.path.join(root, "pythonw.exe")
+        c = os.path.join(root, "python.exe")
+        if os.path.isfile(w):
+            out_w.append(w)
+        if os.path.isfile(c):
+            out_c.append(c)
+    return out_w, out_c
+
+
+def _pin_windows_py_default_311():
+    """
+    Windows py/pyw 런처 기본 버전을 3.11로 (사용자 LOCALAPPDATA\\py.ini).
+    더블클릭 시 처음부터 3.11로 뜨게 한다.
+    """
+    local = os.environ.get("LOCALAPPDATA") or ""
+    if not local:
+        return
+    ini = os.path.join(local, "py.ini")
+    try:
+        existing = ""
+        if os.path.isfile(ini):
+            with open(ini, encoding="utf-8", errors="ignore") as f:
+                existing = f.read()
+        # 이미 3.11 기본이면 유지
+        compact = existing.lower().replace(" ", "")
+        if "python=3.11" in compact:
+            return
+        block = "[defaults]\npython=3.11\n"
+        if "[defaults]" in existing.lower():
+            # defaults 섹션만 3.11로 교체
+            lines = existing.splitlines()
+            out = []
+            in_defaults = False
+            replaced = False
+            for line in lines:
+                s = line.strip().lower()
+                if s.startswith("[") and s.endswith("]"):
+                    in_defaults = s == "[defaults]"
+                    out.append(line)
+                    continue
+                if in_defaults and s.startswith("python="):
+                    out.append("python=3.11")
+                    replaced = True
+                    continue
+                out.append(line)
+            if not replaced:
+                # [defaults] 끝에 추가
+                rebuilt = []
+                in_defaults = False
+                added = False
+                for line in out:
+                    s = line.strip().lower()
+                    if s.startswith("[") and s.endswith("]"):
+                        if in_defaults and not added:
+                            rebuilt.append("python=3.11")
+                            added = True
+                        in_defaults = s == "[defaults]"
+                    rebuilt.append(line)
+                if in_defaults and not added:
+                    rebuilt.append("python=3.11")
+                text = "\n".join(rebuilt).rstrip() + "\n"
+            else:
+                text = "\n".join(out).rstrip() + "\n"
+        else:
+            text = (existing.rstrip() + "\n\n" if existing.strip() else "") + block
+        with open(ini, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+    except Exception:
+        pass
+
+
+def _reexec_with_py311():
+    """현재가 3.11이 아니면 이 스크립트를 3.11로 다시 실행하고 종료."""
+    _pin_windows_py_default_311()
+    if os.environ.get(_REEXEC_ENV) == "1":
+        return
+    if sys.version_info[:2] == PREFERRED_PY:
+        return
+
+    script = _script_path_early()
+    if not script or not os.path.isfile(script):
+        return
+
+    env = os.environ.copy()
+    env[_REEXEC_ENV] = "1"
+    cwd = os.path.dirname(script) or None
+    extra = list(sys.argv[1:])
+
+    pyw_list, py_list = _find_py311_exes()
+    # GUI 더블클릭(pythonw)이면 pythonw 우선
+    is_w = os.path.basename(sys.executable).lower() in ("pythonw.exe", "pyw.exe")
+    cmds = []
+    if is_w:
+        for w in pyw_list:
+            cmds.append([w, script, *extra])
+        # Windows 런처: pyw -3.11
+        cmds.append(["pyw", "-3.11", script, *extra])
+        for c in py_list:
+            cmds.append([c, script, *extra])
+    else:
+        for c in py_list:
+            cmds.append([c, script, *extra])
+        cmds.append(["py", "-3.11", script, *extra])
+        for w in pyw_list:
+            cmds.append([w, script, *extra])
+
+    for cmd in cmds:
+        try:
+            subprocess.Popen(
+                cmd,
+                cwd=cwd,
+                env=env,
+                close_fds=True,
+                creationflags=_CREATE_NO_WINDOW,
+            )
+            os._exit(0)
+        except OSError:
+            continue
+
+
+_reexec_with_py311()
+
+# 여기부터는 Python 3.11 에서만 실행되는 것이 정상
+import importlib.util
 import threading
 import tkinter as tk
 from tkinter import messagebox, font as tkfont, scrolledtext
 
 # Windows: 하위 프로세스 콘솔 창 억제
-CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+CREATE_NO_WINDOW = _CREATE_NO_WINDOW
 
 # 설치 직후 재시작 루프 방지용 (한 번만)
 _DEP_RESTART_ENV = "MEASIN_LAUNCHER_AFTER_DEP_INSTALL"
@@ -84,8 +272,23 @@ def _launcher_script_path():
     return os.path.join(BASE_DIR, "2.검토 및 입력프로그램.pyw")
 
 
+def _resolve_preferred_exe(*, want_w: bool) -> str:
+    """선호 3.11 pythonw/python. 없으면 빈 문자열."""
+    pyw_list, py_list = _find_py311_exes()
+    if want_w:
+        return (pyw_list or py_list or [""])[0]
+    return (py_list or pyw_list or [""])[0]
+
+
 def _get_python_executable():
-    """pip 설치용 — pythonw 대신 python.exe 우선."""
+    """pip 설치용 — 3.11 python.exe 고정."""
+    preferred = _resolve_preferred_exe(want_w=False)
+    if preferred and preferred.lower().endswith("python.exe"):
+        return preferred
+    if preferred:
+        sibling = os.path.join(os.path.dirname(preferred), "python.exe")
+        if os.path.isfile(sibling):
+            return sibling
     exe = sys.executable
     name = os.path.basename(exe).lower()
     if name == "pythonw.exe":
@@ -121,8 +324,8 @@ def _restart_launcher():
     script = _launcher_script_path()
     env = os.environ.copy()
     env[_DEP_RESTART_ENV] = "1"
-    # GUI 재시작은 pythonw 유지
-    exe = sys.executable
+    # GUI 재시작은 선호 3.11 pythonw 유지
+    exe = _get_pythonw_executable()
     try:
         subprocess.Popen(
             [exe, script],
@@ -395,7 +598,14 @@ FONT_FAMILY = "맑은 고딕"
 
 
 def _get_pythonw_executable():
-    """GUI 하위 프로세스는 pythonw로 실행하여 콘솔이 뜨지 않게 한다."""
+    """GUI 하위 프로세스는 선호 3.11 pythonw로 실행 (콘솔 없음)."""
+    preferred = _resolve_preferred_exe(want_w=True)
+    if preferred and preferred.lower().endswith("pythonw.exe"):
+        return preferred
+    if preferred:
+        sibling = os.path.join(os.path.dirname(preferred), "pythonw.exe")
+        if os.path.isfile(sibling):
+            return sibling
     exe = sys.executable
     name = os.path.basename(exe).lower()
     if name == "pythonw.exe":
@@ -630,9 +840,10 @@ def main():
     path_hint = BASE_DIR
     if len(path_hint) > 58:
         path_hint = "…" + path_hint[-55:]
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     footer = tk.Label(
         outer,
-        text=f"작업 경로: {path_hint}",
+        text=f"작업 경로: {path_hint}  ·  Python {py_ver}",
         font=(FONT_FAMILY, 8),
         fg=COLORS["footer"],
         bg=COLORS["bg"],
@@ -646,5 +857,6 @@ def main():
 
 
 if __name__ == "__main__":
+    # 파일 상단 _reexec_with_py311() 에서 이미 3.11 고정
     if ensure_dependencies():
         main()
