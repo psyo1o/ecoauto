@@ -14,6 +14,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium_utils import safe_click, set_date_js, wait_el, tab4_alerts_after_save, tab4_after_comp_save_confirm
 from selenium_utils import accept_all_alerts as _accept_all_alerts
+from selenium_utils import reset_alert_log, check_save_alerts
 from excel_com_utils import get_excel_app, ungroup_excel_sheets
 from realgrid_utils import rg_dump_headers
 from tab4_utils import _norm_rg, tab4_find_tr_by_item, tab4_paste_row_using_tab2
@@ -607,12 +608,15 @@ def fill_water_tab2(driver):
 def save_water_tab2(driver) -> bool:
     """입력완료(#btnSaveMsFieldDoc) + 확인창 2회 (대기 탭2와 동일 패턴)."""
     print("▶ 수질 탭2 입력완료 저장")
+    reset_alert_log()
     try:
         btn = driver.find_element(By.CSS_SELECTOR, "#btnSaveMsFieldDoc")
         driver.execute_script("arguments[0].click();", btn)
         _accept_all_alerts(driver, total_wait=2.5, poll=0.15, label="수질탭2-1차")
         _accept_all_alerts(driver, total_wait=7.0, poll=0.2, label="수질탭2-대기")
         _accept_all_alerts(driver, total_wait=2.0, poll=0.2, label="수질탭2-마무리")
+        if not check_save_alerts("수질 탭2"):
+            return False
         print("▶ 수질 탭2 저장 완료")
         return True
     except Exception as e:
@@ -623,9 +627,14 @@ def save_water_tab2(driver) -> bool:
 def save_water_tab4_temp(driver):
     """임시저장(#btnTempSave) — 탭4만 선택·PDF 미업로드 시."""
     print("▶ 수질 탭4 임시저장 (#btnTempSave)")
+    reset_alert_log()
     try:
-        safe_click(driver, "#btnTempSave")
+        if not safe_click(driver, "#btnTempSave"):
+            print("❌ 수질 탭4 임시저장 버튼 클릭 실패")
+            return False
         tab4_alerts_after_save(driver, label="수질탭4임시")
+        if not check_save_alerts("수질 탭4 임시저장"):
+            return False
         print("✅ 수질 탭4 임시저장 완료")
         return True
     except Exception as e:
@@ -636,9 +645,14 @@ def save_water_tab4_temp(driver):
 def save_water_tab4_complete(driver):
     """분석완료(#btnCompSave) — 탭4 PDF 업로드 후만, 확인창 2회 (대기 탭2 저장 패턴)."""
     print("▶ 수질 탭4 분석완료 (#btnCompSave)")
+    reset_alert_log()
     try:
-        safe_click(driver, "#btnCompSave")
+        if not safe_click(driver, "#btnCompSave"):
+            print("❌ 수질 탭4 분석완료 버튼 클릭 실패")
+            return False
         tab4_after_comp_save_confirm(driver, label="수질탭4완료")
+        if not check_save_alerts("수질 탭4 분석완료"):
+            return False
         print("✅ 수질 탭4 분석완료")
         return True
     except Exception as e:

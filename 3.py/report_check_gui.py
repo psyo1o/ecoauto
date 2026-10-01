@@ -439,7 +439,8 @@ class ReportCheckFileListGUI:
                         self.progress.config(value=total)
                     ))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("오류", str(e)))
+                msg = str(e)
+                self.root.after(0, lambda: messagebox.showerror("오류", msg))
                 self._log("[ERROR] " + str(e))
             finally:
                 try:

@@ -601,9 +601,31 @@ def relax_env_input_time_by_env_psic(sample_rows_map: dict, excel_meta_map: dict
                 r["사이트만존재"] = ""
 
 
-def _collect_tab1_data(driver, data: dict):
+SITE_READ_FAIL = "(사이트 읽기실패)"
+TAB1_LIST_FIELDS = ("장비", "차량", "인력", "측정항목")
+TAB1_SCALAR_FIELDS = ("측정목적", "측정시설")
+TAB2_FIELDS = (
+    "날짜", "기상", "기온", "습도", "기압", "풍향", "풍속", "채취시작", "채취끝",
+    "표준산소농도", "실측산소농도", "배출가스유량전", "배출가스유량후",
+    "수분량", "배출가스온도", "배출가스유속",
+)
+
+
+def _mark_read_failed(data: dict, failures: list) -> None:
+    """탭 읽기 실패 필드를 빈칸 대신 실패 표시로 채움 → 엑셀도 빈칸일 때 OK로 넘어가지 않게."""
+    if "tab1" in failures:
+        for k in TAB1_LIST_FIELDS:
+            data[k] = [SITE_READ_FAIL]
+        for k in TAB1_SCALAR_FIELDS:
+            data[k] = SITE_READ_FAIL
+    if "tab2" in failures:
+        for k in TAB2_FIELDS:
+            data[k] = SITE_READ_FAIL
+
+
+def _collect_tab1_data(driver, data: dict) -> bool:
     if not click_tab(driver, "ui-id-1"):
-        return
+        return False
     time.sleep(1.5)
     try:
         els = driver.find_elements(
@@ -685,10 +707,11 @@ def _collect_tab1_data(driver, data: dict):
         data["측정시설"] = str(fac_txt).strip()
     except Exception:
         data["측정시설"] = ""
+    return True
 
-def _collect_tab2_data(driver, data: dict):
+def _collect_tab2_data(driver, data: dict) -> bool:
     if not click_tab(driver, "ui-id-2"):
-        return
+        return False
     time.sleep(1)
     data["날짜"] = norm_ymd(gv(driver, SEL_DATE))
     data["기상"] = get_weather_text(driver)
@@ -724,6 +747,7 @@ def _collect_tab2_data(driver, data: dict):
     data["수분량"] = gv(driver, SEL_MOISTURE)
     data["배출가스온도"] = gv(driver, SEL_GAS_TEMP)
     data["배출가스유속"] = to_float2(gv(driver, SEL_GAS_SPEED))
+    return True
 
 
 def _collect_tab3_data(driver, data: dict, sample_no: str = "") -> bool:
@@ -756,8 +780,12 @@ def read_site_data(driver, sample_no):
     data = {}
     failures = []
 
-    _collect_tab1_data(driver, data)
-    _collect_tab2_data(driver, data)
+    if not _collect_tab1_data(driver, data):
+        print("⚠ 탭1 읽기 실패")
+        failures.append("tab1")
+    if not _collect_tab2_data(driver, data):
+        print("⚠ 탭2 읽기 실패")
+        failures.append("tab2")
 
     click_tab(driver, "ui-id-2")
     time.sleep(0.5)
@@ -1783,6 +1811,7 @@ def main(progress_callback=None, cancel_event=None):
                         if sample_attempt < MAX_SAMPLE_DETAIL_RETRY:
                             go_back_to_list(driver)
                             continue
+                        _mark_read_failed(site, read_failures)
 
                     PDF_MAP[sample_no] = site.get("PDF경로", "")
                     PHOTO_MAP[sample_no] = site.get("현장사진") or []

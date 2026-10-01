@@ -9,7 +9,14 @@ import time
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
-from selenium_utils import safe_click, set_date_js, tab4_alerts_after_save, tab4_after_comp_save_confirm
+from selenium_utils import (
+    safe_click,
+    set_date_js,
+    tab4_alerts_after_save,
+    tab4_after_comp_save_confirm,
+    reset_alert_log,
+    check_save_alerts,
+)
 from realgrid_utils import rg_paste_to_tr_tab4
 from excel_com_utils import get_excel_app, ungroup_excel_sheets
 from data_utils import sample_to_datestr
@@ -450,13 +457,21 @@ def fill_tab4_dates(driver, sample_no: str, tab4_meta: dict):
 # =====================================================================
 # 탭4 저장
 # =====================================================================
-def tab4_temp_save(driver):
+def tab4_temp_save(driver) -> bool:
     """임시저장 — 수정 사유 창 없음, 확인 alert만."""
-    safe_click(driver, "#btnTempSave")
+    reset_alert_log()
+    if not safe_click(driver, "#btnTempSave"):
+        print("❌ 탭4 임시저장 버튼(#btnTempSave) 클릭 실패")
+        return False
     tab4_alerts_after_save(driver, label="탭4임시저장")
+    return check_save_alerts("탭4 임시저장")
 
 
-def tab4_comp_save(driver):
+def tab4_comp_save(driver) -> bool:
     """분석완료 — 재수정 시 수정 사유 자동 입력 후 확인."""
-    safe_click(driver, "#btnCompSave")
+    reset_alert_log()
+    if not safe_click(driver, "#btnCompSave"):
+        print("❌ 탭4 분석완료 버튼(#btnCompSave) 클릭 실패")
+        return False
     tab4_after_comp_save_confirm(driver, label="탭4저장완료")
+    return check_save_alerts("탭4 분석완료")

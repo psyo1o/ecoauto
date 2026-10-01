@@ -10,7 +10,20 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoAlertPresentException
+import os
+import re
+import subprocess
 import time
+import urllib.request
+
+# eco_input / eco_check 가 같은 크롬 창을 이어 쓰기 위한 원격 디버깅 포트·전용 프로필
+REUSE_DEBUG_PORT = 9322
+REUSE_PROFILE_DIR = os.path.join(
+    os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"),
+    "ecoauto",
+    "chrome_profile",
+)
+_LAST_LOGIN_FILE = os.path.join(os.path.dirname(REUSE_PROFILE_DIR), "last_login_id.txt")
 
 
 def wait(sec):
@@ -45,13 +58,167 @@ def _raise_policy_block(cause: BaseException) -> None:
     ) from cause
 
 
+def get_last_login_id() -> str:
+    try:
+        with open(_LAST_LOGIN_FILE, encoding="utf-8") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
+def save_last_login_id(login_id: str) -> None:
+    try:
+        os.makedirs(os.path.dirname(_LAST_LOGIN_FILE), exist_ok=True)
+        with open(_LAST_LOGIN_FILE, "w", encoding="utf-8") as f:
+            f.write(str(login_id or "").strip())
+    except Exception:
+        pass
+
+
+def _debug_port_alive(port: int = REUSE_DEBUG_PORT, timeout: float = 1.0) -> bool:
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/json/version", timeout=timeout
+        ) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def _find_chrome_exe() -> str | None:
+    candidates = []
+    for env in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+        base = os.environ.get(env)
+        if base:
+            candidates.append(os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"))
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+    try:
+        import winreg
+
+        for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            try:
+                with winreg.OpenKey(
+                    root, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
+                ) as k:
+                    p = winreg.QueryValue(k, None)
+                    if p and os.path.isfile(p):
+                        return p
+            except OSError:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+def _launch_debug_chrome(port: int = REUSE_DEBUG_PORT) -> bool:
+    """원격 디버깅 포트를 연 크롬을 GUI 종료 후에도 남도록 독립 프로세스로 실행."""
+    exe = _find_chrome_exe()
+    if not exe:
+        print("   ⚠ chrome.exe 위치를 찾지 못해 브라우저 재사용 불가", flush=True)
+        return False
+    os.makedirs(REUSE_PROFILE_DIR, exist_ok=True)
+    args = [
+        exe,
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={REUSE_PROFILE_DIR}",
+        "--disable-notifications",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--start-maximized",
+        "about:blank",
+    ]
+    flags = 0
+    if os.name == "nt":
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    try:
+        subprocess.Popen(
+            args,
+            creationflags=flags,
+            close_fds=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as e:
+        print(f"   ⚠ 크롬 실행 실패: {e}", flush=True)
+        return False
+    t0 = time.time()
+    while time.time() - t0 < 20:
+        if _debug_port_alive(port):
+            return True
+        time.sleep(0.5)
+    print("   ⚠ 크롬 원격 디버깅 포트 응답 없음", flush=True)
+    return False
+
+
+def _tidy_reused_windows(d) -> None:
+    """이어 쓰는 창: 알림창 닫고 탭 하나만 남김."""
+    try:
+        d.switch_to.alert.accept()
+    except Exception:
+        pass
+    try:
+        handles = list(d.window_handles)
+        if not handles:
+            d.switch_to.new_window("tab")
+            return
+        keep = handles[0]
+        for h in handles[1:]:
+            try:
+                d.switch_to.window(h)
+                d.close()
+            except Exception:
+                pass
+        d.switch_to.window(keep)
+    except Exception:
+        pass
+
+
+def _init_reused_driver():
+    """열려 있는 재사용 크롬에 붙고, 없으면 새로 띄운 뒤 붙는다. 실패 시 None."""
+    reused = _debug_port_alive()
+    if reused:
+        print("   ↳ 기존 브라우저에 연결합니다 (이어서 작업)", flush=True)
+    elif not _launch_debug_chrome():
+        return None
+
+    opt = webdriver.ChromeOptions()
+    opt.debugger_address = f"127.0.0.1:{REUSE_DEBUG_PORT}"
+    try:
+        d = _start_webdriver(opt)
+    except Exception as e:
+        print(f"   ⚠ 재사용 브라우저 연결 실패 → 새 브라우저로 진행: {e}", flush=True)
+        return None
+    d._eco_reused = reused
+    _tidy_reused_windows(d)
+    try:
+        d.maximize_window()
+    except Exception:
+        pass
+    return d
+
+
 def init_driver():
     """Selenium Chrome 드라이버 초기화.
 
-    PATH의 chromedriver(네트워크·C:\\chromedriver 등)가 정책에 막히는 PC는
+    전용 프로필 크롬(원격 디버깅 포트)을 재사용해 이전 작업 창에서 이어서 진행한다.
+    재사용이 안 되면 예전처럼 새 크롬을 띄운다.
+    """
+    d = _init_reused_driver()
+    if d is not None:
+        return d
+    d = _start_webdriver(_chrome_options())
+    d._eco_reused = False
+    d.maximize_window()
+    return d
+
+
+def _start_webdriver(opt):
+    """PATH의 chromedriver(네트워크·C:\\chromedriver 등)가 정책에 막히는 PC는
     webdriver-manager가 사용자 폴더(.wdm)에 받은 드라이버를 우선 사용한다.
     """
-    opt = _chrome_options()
     last_err = None
 
     try:
@@ -60,9 +227,7 @@ def init_driver():
 
         driver_path = ChromeDriverManager().install()
         print(f"   ↳ ChromeDriver: {driver_path}", flush=True)
-        d = webdriver.Chrome(service=Service(driver_path), options=opt)
-        d.maximize_window()
-        return d
+        return webdriver.Chrome(service=Service(driver_path), options=opt)
     except ImportError:
         pass
     except OSError as e:
@@ -75,9 +240,7 @@ def init_driver():
         print(f"   ⚠ webdriver-manager 경로 실패: {e}", flush=True)
 
     try:
-        d = webdriver.Chrome(options=opt)
-        d.maximize_window()
-        return d
+        return webdriver.Chrome(options=opt)
     except OSError as e:
         if getattr(e, "winerror", None) == 4551:
             _raise_policy_block(e)
@@ -117,14 +280,46 @@ def wait_el(driver, selector, timeout=10):
         return None
 
 
+_ALERT_LOG: list = []
+
+# 확인 질문('?' 포함)은 제외하고, 이 표현이 들어간 alert는 저장 실패로 본다
+SAVE_ERROR_RE = re.compile(
+    r"입력하세요|입력해\s*주|입력하십시오|선택하세요|선택해\s*주|선택하십시오"
+    r"|필수|오류|에러|실패|올바르지|잘못|불가|초과|누락"
+)
+
+
+def reset_alert_log() -> None:
+    _ALERT_LOG.clear()
+
+
+def save_alert_errors() -> list:
+    """reset_alert_log() 이후 수락한 alert 중 오류로 보이는 문구."""
+    return [t for t in _ALERT_LOG if t and "?" not in t and SAVE_ERROR_RE.search(t)]
+
+
+def check_save_alerts(label: str) -> bool:
+    errs = save_alert_errors()
+    for t in errs:
+        print(f"❌ {label} 저장 오류 확인창: {t}")
+    return not errs
+
+
 def accept_all_alerts(driver, total_wait=8.0, poll=0.2, max_accept=10, label=""):
-    """모든 alert 자동 수락"""
+    """모든 alert 자동 수락 (문구는 _ALERT_LOG에 기록)"""
     end = time.time() + float(total_wait)
     accepted = 0
 
     while time.time() < end and accepted < max_accept:
         try:
             alert = driver.switch_to.alert
+            try:
+                text = (alert.text or "").strip()
+            except Exception:
+                text = ""
+            if text:
+                _ALERT_LOG.append(text)
+                print(f"   ↳ 확인창: {text.replace(chr(10), ' ')[:120]}")
             alert.accept()
             accepted += 1
             time.sleep(0.25)

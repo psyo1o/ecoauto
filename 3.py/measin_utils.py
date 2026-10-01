@@ -15,7 +15,15 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 
-from selenium_utils import safe_click, set_date_js, close_popup, wait_el, accept_all_alerts
+from selenium_utils import (
+    safe_click,
+    set_date_js,
+    close_popup,
+    wait_el,
+    accept_all_alerts,
+    get_last_login_id,
+    save_last_login_id,
+)
 from config import REPORT_BASE, REPORT_WORKFLOW_DIRS, LOGIN_URL, FIELD_URL
 
 NAS_BASE = REPORT_BASE
@@ -112,6 +120,38 @@ def ensure_logged_in_or_recover(
     return True
 
 
+def safe_get(driver, url: str, tries: int = 4, settle: float = 2.0) -> None:
+    """페이지 이동. 확인창(중복 로그인·로그아웃 안내 등)이나 진행 중인 이동 때문에
+    'aborted by navigation' / 'unexpected alert'가 나면 확인창을 닫고 다시 시도."""
+    last = None
+    for i in range(1, tries + 1):
+        try:
+            driver.get(url)
+            time.sleep(settle)
+            return
+        except Exception as e:
+            last = e
+            msg = str(e).splitlines()[0][:120]
+            print(f"   ↳ 페이지 이동 재시도 ({i}/{tries}): {msg}")
+            accept_all_alerts(driver, total_wait=1.5, poll=0.2, max_accept=5, label="이동중확인창")
+            time.sleep(1.0)
+    raise last
+
+
+def _try_resume_session(driver, login_id: str, field_url: str) -> bool:
+    """이어 쓰는 브라우저가 같은 ID로 로그인돼 있으면 현장측정분석 목록으로 바로 이동."""
+    if (get_last_login_id() or "") != str(login_id or "").strip():
+        return False
+    try:
+        accept_all_alerts(driver, total_wait=0.5, poll=0.2, max_accept=5, label="이어쓰기")
+        safe_get(driver, field_url)
+        accept_all_alerts(driver, total_wait=1.0, poll=0.2, max_accept=5, label="이어쓰기")
+        close_popup(driver)
+        return is_field_list_ready(driver)
+    except Exception:
+        return False
+
+
 def login(driver, login_id: str, login_pw: str,
           login_url: str = LOGIN_URL,
           field_url: str = FIELD_URL):
@@ -119,12 +159,26 @@ def login(driver, login_id: str, login_pw: str,
     측정인.kr 로그인 후 현장측정분석(대기) 페이지로 이동.
     ID/PW 자동 입력 실패 시 사용자에게 직접 입력 요청.
     """
+    media = "수질" if "field_water" in (field_url or "") else "대기"
+    if _try_resume_session(driver, login_id, field_url):
+        print(f"[1] 로그인 유지 중 → 현장측정분석({media}) 바로 이어서 진행")
+        return
+
     dismiss_logout_alerts(driver)
 
     print("[1] 로그인 페이지 이동")
     if not is_logged_out(driver):
-        driver.get(login_url)
-        time.sleep(2)
+        safe_get(driver, login_url)
+        dismiss_logout_alerts(driver, rounds=1)
+        # 이어 쓰는 창이 다른(또는 모르는) ID로 로그인돼 있으면 로그인 페이지에 입력칸이 없음
+        if not is_logged_out(driver):
+            print("   ↳ 기존 로그인 세션 정리 후 다시 로그인")
+            try:
+                driver.delete_all_cookies()
+            except Exception:
+                pass
+            safe_get(driver, login_url)
+            dismiss_logout_alerts(driver, rounds=1)
 
     try:
         _clear_and_fill_input(driver, LOGIN_ID_SEL, login_id)
@@ -141,10 +195,32 @@ def login(driver, login_id: str, login_pw: str,
     dismiss_logout_alerts(driver, rounds=2)
     close_popup(driver)
 
-    media = "수질" if "field_water" in (field_url or "") else "대기"
     print(f"[2] 현장측정분석({media}) 이동")
-    driver.get(field_url)
-    time.sleep(2)
+    safe_get(driver, field_url)
+    accept_all_alerts(driver, total_wait=1.0, poll=0.2, max_accept=5, label="로그인후")
+    if is_logged_out(driver):
+        print(f"⚠ 로그인 후에도 로그인 화면입니다 (현재 주소: {driver.current_url})")
+        _print_visible_dialogs(driver)
+    else:
+        save_last_login_id(login_id)
+
+
+def _print_visible_dialogs(driver) -> None:
+    """화면에 떠 있는 모달(중복 로그인 안내 등) 문구를 로그로 남김."""
+    try:
+        texts = driver.execute_script(
+            """
+            return Array.from(document.querySelectorAll('.modal, [role=dialog], .ui-dialog'))
+              .filter(m => { const r = m.getBoundingClientRect(); return r.width && r.height
+                              && getComputedStyle(m).display !== 'none'; })
+              .map(m => m.innerText.trim().replace(/\\s+/g, ' ').slice(0, 200));
+            """
+        ) or []
+        for t in texts:
+            if t:
+                print(f"   ↳ 화면 안내창: {t}")
+    except Exception:
+        pass
 
 
 # ======================================================================

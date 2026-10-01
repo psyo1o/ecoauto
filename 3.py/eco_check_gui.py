@@ -236,7 +236,8 @@ class EcoCheckGUI:
             except Exception as e:
                 import traceback
                 traceback.print_exc()
-                self.root.after(0, lambda: messagebox.showerror("오류", str(e)))
+                msg = str(e)
+                self.root.after(0, lambda: messagebox.showerror("오류", msg))
             finally:
                 builtins.input = old_input
                 self.root.after(0, lambda: (

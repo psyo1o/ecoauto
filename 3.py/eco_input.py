@@ -52,7 +52,8 @@ from selenium_utils import (
     init_driver, safe_click, wait_el, set_date_js, fill_select_option,
     accept_all_alerts as _accept_all_alerts,
     accept_all_alerts as _accept_alerts_base,
-    close_popup, wait
+    close_popup, wait,
+    reset_alert_log, check_save_alerts,
 )
 from measin_utils import (
     login, search_date, wait_grid_loaded,
@@ -929,19 +930,16 @@ def fill_tab1(d, data, is_dust):
     print("▶ 탭1 입력 완료")
 
     # 탭1 저장 버튼 (비산먼지/일반 공통)
-    try:
-        safe_click(d, "#updateFieldPlanBtn")
-        try:
-            d.switch_to.alert.accept(); wait(0.5)
-        except:
-            pass
-        try:
-            d.switch_to.alert.accept(); wait(0.5)
-        except:
-            pass
-        print("✅ 탭1 저장 완료")
-    except:
+    reset_alert_log()
+    if not safe_click(d, "#updateFieldPlanBtn"):
+        print("⚠ 탭1 저장 실패 (#updateFieldPlanBtn 클릭 불가)")
+        return False
+    _accept_all_alerts(d, total_wait=1.5, poll=0.2, label="탭1저장")
+    if not check_save_alerts("탭1"):
         print("⚠ 탭1 저장 실패")
+        return False
+    print("✅ 탭1 저장 완료")
+    return True
 
 
 # =====================================================================
@@ -1359,6 +1357,7 @@ def save_tab2(driver, use_final_save=False):
     """
     btn_sel = "#btnSaveMsFieldDoc" if use_final_save else "#btnDraftMsFieldDoc"
     print(f"▶ 탭2 저장 시작 ({'입력완료' if use_final_save else '임시저장'})")
+    reset_alert_log()
 
     try:
         btn = driver.find_element(By.CSS_SELECTOR, btn_sel)
@@ -1375,6 +1374,8 @@ def save_tab2(driver, use_final_save=False):
         # ✅ 마무리로 한 번 더(잔여 알럿 방지)
         _accept_all_alerts(driver, total_wait=2.0, poll=0.2, label="마무리")
 
+        if not check_save_alerts("탭2"):
+            return False
         print("▶ 탭2 저장 완료")
         return True
 
@@ -2351,6 +2352,7 @@ def _main_water(
             break
 
         site_input_ok = False
+        water_tab2_done = False
         for sample_attempt in range(1, MAX_SAMPLE_DETAIL_RETRY + 1):
             if is_cancelled(cancel_event):
                 break
@@ -2400,15 +2402,21 @@ def _main_water(
 
             site_input_ok = True
             try:
-                if do_tab2:
+                if do_tab2 and water_tab2_done:
+                    print("▶ 수질 탭2 스킵 (이번 시료에서 이미 입력완료)")
+                elif do_tab2:
                     fill_water_tab2(driver)
-                    if not save_water_tab2(driver):
+                    if save_water_tab2(driver):
+                        water_tab2_done = True
+                    else:
                         print("⚠ 수질 탭2 입력완료 저장 실패")
                         site_input_ok = False
                 elif do_tab4 and not water_tab4_tab_clickable(driver):
                     print("▶ 수질 탭4 선택 — 탭2 미완료로 탭4 비활성 → 탭2 입력완료 선행")
                     fill_water_tab2(driver)
-                    if not save_water_tab2(driver):
+                    if save_water_tab2(driver):
+                        water_tab2_done = True
+                    else:
                         print("❌ 탭2 입력완료 실패")
                         site_input_ok = False
                 elif do_tab4:
@@ -2894,7 +2902,8 @@ def _main_air(
                                 print("✅ PDF 탭4 완료")
 
                             if do_pdf_final:
-                                tab4_comp_save(driver)
+                                if not tab4_comp_save(driver):
+                                    raise RuntimeError("탭4 분석완료 저장 실패")
                                 print("✅ 탭4 입력완료")
                                 # 그룹웨어 PDF = 대기측정기록부 + 먼지시료채취기록지(있으면)
                                 _try_groupware_tab4_sync(
@@ -2910,8 +2919,10 @@ def _main_air(
                                     ) if pdfs else None,
                                 )
                             else:
-                                tab4_temp_save(driver)
-                                print("⚠ 탭4임시저장")
+                                if tab4_temp_save(driver):
+                                    print("⚠ 탭4임시저장")
+                                else:
+                                    print("❌ 탭4 임시저장 실패")
 
                             if pdfs:
                                 cleanup_tmp_pdfs(PDF_TMP_DIR, sample)
