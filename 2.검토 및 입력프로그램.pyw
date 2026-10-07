@@ -551,7 +551,7 @@ PROGRAM_GROUPS = (
         "title": "입력",
         "accent": "#5B8A72",
         "items": (
-            ("1. 측정인 자동입력", "eco_input_gui.py"),
+            ("1. 측정인 자동입력 · 검토", "eco_input_gui.py"),
             ("8. 그룹웨어 전송(재전송,직접)", "groupware_resend_gui.py"),
         ),
     },
@@ -559,7 +559,6 @@ PROGRAM_GROUPS = (
         "title": "검토",
         "accent": "#5E81AC",
         "items": (
-            ("2. 측정인 검토", "eco_check_gui.py"),
             ("3. 발송대장 검토", "receipt.py"),
             ("5. 성적서 검토", "report_check_gui.py"),
             ("6. 차량운행일지 검토", "Vehicle_operation_log.py"),
@@ -622,9 +621,8 @@ PYTHONW = _get_pythonw_executable()
 
 # 스크립트 파일명 → 런처 표시명 (시작 중 안내용)
 SCRIPT_LABELS = {
-    "eco_input_gui.py": "1. 측정인 자동입력",
+    "eco_input_gui.py": "1. 측정인 자동입력 · 검토",
     "groupware_resend_gui.py": "8. 그룹웨어 전송(재전송,직접)",
-    "eco_check_gui.py": "2. 측정인 검토",
     "receipt.py": "3. 발송대장 검토",
     "report_check_gui.py": "5. 성적서 검토",
     "Vehicle_operation_log.py": "6. 차량운행일지 검토",
@@ -843,11 +841,12 @@ def main():
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     footer = tk.Label(
         outer,
-        text=f"작업 경로: {path_hint}  ·  Python {py_ver}",
+        text=f"작업 경로: {path_hint}\nPython {py_ver}",
         font=(FONT_FAMILY, 8),
         fg=COLORS["footer"],
         bg=COLORS["bg"],
         anchor="w",
+        justify="left",
     )
     footer.pack(fill=tk.X, pady=(14, 0))
 

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-측정인 자동 입력 및 백데이터 GUI
+측정인 자동 입력 · 검토 GUI
+- 실행 구분: 입력(eco_input) / 검토(eco_check, 대기·팀+날짜 전용)
 - 매체(대기/수질) Notebook 탭 전환
 - 대기: 측정(탭1/2/백데이터) / 분석(탭4) 탭
 - 수질: 탭2 + 탭4(RealGrid·PDF)
@@ -104,7 +105,7 @@ class EcoInputGUI:
     # 윈도우 / 위젯 초기 구성
     # ──────────────────────────────────────────────
     def _setup_window(self):
-        self.root.title("측정인 자동 입력 및 백데이터")
+        self.root.title("측정인 자동 입력 · 검토")
         self.root.geometry("860x640")
         self.root.minsize(800, 560)
         self.root.resizable(True, True)
@@ -119,9 +120,10 @@ class EcoInputGUI:
         self.input_frame = ttk.Frame(outer, padding=8)
         self.input_frame.grid(row=0, column=0, sticky="nsew")
         self.input_frame.grid_columnconfigure(1, weight=1)
-        self.input_frame.grid_rowconfigure(2, weight=1)
-        self.input_frame.grid_rowconfigure(3, weight=0)
+        self.input_frame.grid_rowconfigure(2, weight=0)
+        self.input_frame.grid_rowconfigure(3, weight=1)
         self.input_frame.grid_rowconfigure(4, weight=0)
+        self.input_frame.grid_rowconfigure(5, weight=0)
 
         self._create_input_area()
 
@@ -133,9 +135,10 @@ class EcoInputGUI:
 
     def _create_input_area(self):
         self._create_login_fields()       # row 0, 1
-        self._create_media_notebook()     # row 2  (대기/수질)
-        self._create_progress_area()      # row 3
-        self._create_action_button()      # row 4
+        self._create_run_kind()           # row 2  (입력/검토)
+        self._create_media_notebook()     # row 3  (대기/수질)
+        self._create_progress_area()      # row 4
+        self._create_action_button()      # row 5
 
     # ── 로그인 (공통) ──────────────────────────────
     def _create_login_fields(self):
@@ -149,11 +152,48 @@ class EcoInputGUI:
         self.entry_pw = ttk.Entry(self.input_frame, width=38, show="*")
         self.entry_pw.grid(row=1, column=1, sticky="we", pady=2)
 
+    # ── 실행 구분 (입력/검토) ──────────────────────
+    def _create_run_kind(self):
+        self.run_kind_var = tk.StringVar(value="input")
+        frame = ttk.LabelFrame(self.input_frame, text="실행 구분", padding=(6, 2))
+        frame.grid(row=2, column=0, columnspan=2, sticky="we", pady=(6, 0))
+        self.run_kind_radios = [
+            ttk.Radiobutton(frame, text="입력 (측정인 자동입력)",
+                            value="input", variable=self.run_kind_var),
+            ttk.Radiobutton(frame, text="검토 (대기 · 팀+날짜)",
+                            value="check", variable=self.run_kind_var),
+        ]
+        for i, rb in enumerate(self.run_kind_radios):
+            rb.grid(row=0, column=i, sticky="w", padx=(0, 16))
+
+    def _is_check(self) -> bool:
+        return self.run_kind_var.get() == "check"
+
+    def _set_run_kind_enabled(self, enabled: bool):
+        for rb in self.run_kind_radios:
+            rb.configure(state="normal" if enabled else "disabled")
+
+    def _lock_for_check(self):
+        """검토 모드: 검토에 해당 없는 선택 비활성화 (변수 값은 유지)."""
+        if not self._is_check():
+            return
+        for w in self.job_radios + self.mode_radios + [
+                self.chk_tab1, self.chk_tab2, self.chk_pdf, self.chk_backdata,
+                self.chk_tab4, self.chk_pdf_final]:
+            w.configure(state="disabled")
+        try:
+            if self._air_is_analyze_tab():
+                self.air_work_nb.select(self.air_measure_tab)
+            self.air_work_nb.tab(self.air_analyze_tab, state="disabled")
+            self.media_nb.tab(self.water_tab, state="disabled")
+        except tk.TclError:
+            pass
+
     # ── 매체 탭 (대기/수질) ────────────────────────
     def _create_media_notebook(self):
         self.media_var = tk.StringVar(value="1")
         self.media_nb = ttk.Notebook(self.input_frame)
-        self.media_nb.grid(row=2, column=0, columnspan=2, sticky="nsew", pady=(4, 2))
+        self.media_nb.grid(row=3, column=0, columnspan=2, sticky="nsew", pady=(4, 2))
 
         self.air_tab = ttk.Frame(self.media_nb, padding=6)
         self.water_tab = ttk.Frame(self.media_nb, padding=6)
@@ -163,7 +203,7 @@ class EcoInputGUI:
         self.air_tab.grid_columnconfigure(0, weight=1)
         self.air_tab.grid_rowconfigure(2, weight=1)
         self.water_tab.grid_columnconfigure(0, weight=1)
-        self.water_tab.grid_rowconfigure(0, weight=1)
+        self.water_tab.grid_rowconfigure(2, weight=1)
 
         self._create_air_area()
         self._create_water_area()
@@ -180,21 +220,29 @@ class EcoInputGUI:
 
         self.air_job_frame = ttk.LabelFrame(job_mode_frame, text="작업 선택", padding=6)
         self.air_job_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
-        ttk.Radiobutton(self.air_job_frame,
-                        text="1) 측정인 자동입력",
-                        value="1", variable=self.job_var).grid(row=0, column=0, sticky="w", pady=1)
-        ttk.Radiobutton(self.air_job_frame,
-                        text="2) 백데이터만",
-                        value="2", variable=self.job_var).grid(row=1, column=0, sticky="w", pady=1)
+        self.job_radios = [
+            ttk.Radiobutton(self.air_job_frame,
+                            text="1) 측정인 자동입력",
+                            value="1", variable=self.job_var),
+            ttk.Radiobutton(self.air_job_frame,
+                            text="2) 백데이터만",
+                            value="2", variable=self.job_var),
+        ]
+        for i, rb in enumerate(self.job_radios):
+            rb.grid(row=i, column=0, sticky="w", pady=1)
 
         self.air_mode_frame = ttk.LabelFrame(job_mode_frame, text="모드 선택", padding=6)
         self.air_mode_frame.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
-        ttk.Radiobutton(self.air_mode_frame,
-                        text="1) 시료번호 직접입력",
-                        value="1", variable=self.mode_var).grid(row=0, column=0, sticky="w", pady=1)
-        ttk.Radiobutton(self.air_mode_frame,
-                        text="2) 팀+날짜 자동추출",
-                        value="2", variable=self.mode_var).grid(row=1, column=0, sticky="w", pady=1)
+        self.mode_radios = [
+            ttk.Radiobutton(self.air_mode_frame,
+                            text="1) 시료번호 직접입력",
+                            value="1", variable=self.mode_var),
+            ttk.Radiobutton(self.air_mode_frame,
+                            text="2) 팀+날짜 자동추출",
+                            value="2", variable=self.mode_var),
+        ]
+        for i, rb in enumerate(self.mode_radios):
+            rb.grid(row=i, column=0, sticky="w", pady=1)
 
         self.tab1_var      = tk.BooleanVar(value=True)
         self.tab2_var      = tk.BooleanVar(value=True)
@@ -301,9 +349,53 @@ class EcoInputGUI:
         self.water_tab4_var = tk.BooleanVar(value=True)
         self.water_pdf_final_var = tk.BooleanVar(value=True)
 
+        # 대기와 같은 배치: 작업/모드 선택 → 측정·분석 탭 → 시료번호 입력
+        # 수질은 '측정인 자동입력' + '시료번호 직접입력'만 지원 (나머지는 표시만, 선택 불가)
+        self.water_job_var = tk.StringVar(value="1")
+        self.water_mode_var = tk.StringVar(value="1")
+
+        w_job_mode = ttk.Frame(self.water_tab)
+        w_job_mode.grid(row=0, column=0, sticky="we", pady=2)
+        w_job_mode.grid_columnconfigure(0, weight=1)
+        w_job_mode.grid_columnconfigure(1, weight=1)
+
+        w_job_frame = ttk.LabelFrame(w_job_mode, text="작업 선택", padding=6)
+        w_job_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        w_mode_frame = ttk.LabelFrame(w_job_mode, text="모드 선택", padding=6)
+        w_mode_frame.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+        for i, (text, val, var, parent) in enumerate([
+            ("1) 측정인 자동입력", "1", self.water_job_var, w_job_frame),
+            ("2) 백데이터만", "2", self.water_job_var, w_job_frame),
+            ("1) 시료번호 직접입력", "1", self.water_mode_var, w_mode_frame),
+            ("2) 팀+날짜 자동추출", "2", self.water_mode_var, w_mode_frame),
+        ]):
+            rb = ttk.Radiobutton(parent, text=text, value=val, variable=var)
+            rb.grid(row=i % 2, column=0, sticky="w", pady=1)
+            if val == "2":
+                rb.configure(state="disabled")
+
+        w_work_nb = ttk.Notebook(self.water_tab)
+        w_work_nb.grid(row=1, column=0, sticky="we", pady=2)
+        w_work_tab = ttk.Frame(w_work_nb, padding=6)
+        w_work_nb.add(w_work_tab, text="측정 · 분석")
+        w_work_tab.grid_columnconfigure(0, weight=1)
+        w_work_tab.grid_columnconfigure(1, weight=1)
+
+        self.chk_water_tab2 = ttk.Checkbutton(
+            w_work_tab, text="시험의뢰정보 (탭2)", variable=self.water_tab2_var)
+        self.chk_water_tab2.grid(row=0, column=0, sticky="w", padx=(4, 8), pady=1)
+
+        self.chk_water_tab4 = ttk.Checkbutton(
+            w_work_tab, text="측정분석결과 (탭4)", variable=self.water_tab4_var)
+        self.chk_water_tab4.grid(row=1, column=0, sticky="w", padx=(4, 8), pady=1)
+
+        self.chk_water_pdf = ttk.Checkbutton(
+            w_work_tab, text="탭4 PDF", variable=self.water_pdf_final_var)
+        self.chk_water_pdf.grid(row=1, column=1, sticky="w", padx=4, pady=1)
+
         self.water_frame = ttk.LabelFrame(
-            self.water_tab, text="수질 시료번호 입력", padding=6)
-        self.water_frame.grid(row=0, column=0, sticky="nsew", pady=2)
+            self.water_tab, text="모드1: 수질 시료번호 입력", padding=6)
+        self.water_frame.grid(row=2, column=0, sticky="nsew", pady=2)
         self.water_frame.grid_columnconfigure(0, weight=1)
         self.water_frame.grid_rowconfigure(1, weight=1)
 
@@ -333,29 +425,20 @@ class EcoInputGUI:
         )
         self.lbl_drop_water.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 0), ipady=3)
 
-        # 탭2·탭4·PDF 한 줄 배치 (세로 공간 절약)
-        opt_frame = ttk.Frame(self.water_frame)
-        opt_frame.grid(row=3, column=0, columnspan=2, sticky="we", pady=(2, 0))
-
-        self.chk_water_tab2 = ttk.Checkbutton(
-            opt_frame, text="시험의뢰정보 (탭2)", variable=self.water_tab2_var)
-        self.chk_water_tab2.grid(row=0, column=0, sticky="w", padx=(0, 6))
-
-        self.chk_water_tab4 = ttk.Checkbutton(
-            opt_frame, text="측정분석결과 (탭4)", variable=self.water_tab4_var)
-        self.chk_water_tab4.grid(row=0, column=1, sticky="w", padx=(0, 6))
-
-        self.chk_water_pdf = ttk.Checkbutton(
-            opt_frame, text="탭4 PDF", variable=self.water_pdf_final_var)
-        self.chk_water_pdf.grid(row=0, column=2, sticky="w")
-
     def _create_progress_area(self):
-        self.progress_bar = ttk.Progressbar(self.input_frame, mode="determinate")
-        self.progress_bar.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 2))
+        progress_frame = ttk.Frame(self.input_frame)
+        progress_frame.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 2))
+        progress_frame.columnconfigure(0, weight=1)
+        self.progress_bar = ttk.Progressbar(progress_frame, mode="determinate")
+        self.progress_bar.grid(row=0, column=0, sticky="ew")
+        self.progress_var = tk.StringVar(value="")
+        ttk.Label(progress_frame, textvariable=self.progress_var,
+                  font=("맑은 고딕", 9, "bold"), foreground="darkgreen"
+                  ).grid(row=0, column=1, sticky="e", padx=(8, 0))
 
     def _create_action_button(self):
         btn_frame = ttk.Frame(self.input_frame)
-        btn_frame.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(8, 14))
+        btn_frame.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(8, 14))
 
         btn_center = ttk.Frame(btn_frame)
         btn_center.pack(anchor="center")
@@ -373,6 +456,8 @@ class EcoInputGUI:
             self.cancel_event.set()
             self.cancel_btn.config(state="disabled")
             self.start_btn.config(text="취소 중...")
+            if self._is_check():
+                self.progress_var.set("취소 중...")
 
     def _create_log_area(self, parent):
         log_frame = ttk.LabelFrame(parent, text="로그", padding=10)
@@ -433,6 +518,7 @@ class EcoInputGUI:
             else:
                 self.pdf_var.set(False)
                 self.chk_pdf.configure(state="disabled")
+            self._lock_for_check()
 
         def update_pdf_final_state(*_):
             if self.tab4_var.get() and self.job_var.get() != "2":
@@ -440,6 +526,7 @@ class EcoInputGUI:
             else:
                 self.pdf_final_var.set(False)
                 self.chk_pdf_final.configure(state="disabled")
+            self._lock_for_check()
 
         def update_water_pdf_state(*_):
             if self.water_tab4_var.get():
@@ -485,11 +572,34 @@ class EcoInputGUI:
                     w.configure(state="normal")
                 update_pdf_state()
                 update_pdf_final_state()
+            self._lock_for_check()
+
+        def update_run_kind_ui(*_):
+            if self._is_check():
+                self.media_nb.select(self.air_tab)
+                self.media_var.set("1")
+                self.job_var.set("1")
+                self.mode_var.set("2")
+                self.start_btn.config(text="검토 시작")
+                update_job_ui(clear_login=False)
+            else:
+                for w in self.job_radios + self.mode_radios:
+                    w.configure(state="normal")
+                self.media_nb.tab(self.water_tab, state="normal")
+                self.progress_var.set("")
+                self.start_btn.config(text="자동 입력 시작")
+                update_job_ui(clear_login=False)
+                update_mode_ui()
+                if not any(v.get() for v in (self.tab1_var, self.tab2_var, self.tab4_var)):
+                    self._check_current_air_work_options()
 
         def on_media_tab_changed(_=None):
             try:
                 is_water = self.media_nb.select() == str(self.water_tab)
             except tk.TclError:
+                return
+            if is_water and self._is_check():
+                self.media_nb.select(self.air_tab)
                 return
             self.media_var.set("2" if is_water else "1")
             if is_water:
@@ -500,6 +610,8 @@ class EcoInputGUI:
                 update_mode_ui()
 
         def on_air_work_tab_changed(_=None):
+            if self._is_check():
+                return
             self._check_current_air_work_options()
 
         # 트레이스 연결
@@ -508,6 +620,7 @@ class EcoInputGUI:
         self.water_tab4_var.trace_add("write", update_water_pdf_state)
         self.mode_var.trace_add("write", update_mode_ui)
         self.job_var.trace_add("write", update_job_ui)
+        self.run_kind_var.trace_add("write", update_run_kind_ui)
         self.media_nb.bind("<<NotebookTabChanged>>", on_media_tab_changed)
         self.air_work_nb.bind("<<NotebookTabChanged>>", on_air_work_tab_changed)
 
@@ -646,6 +759,10 @@ class EcoInputGUI:
     # 실행 버튼
     # ──────────────────────────────────────────────
     def _on_start(self):
+        if self._is_check():
+            self._start_check()
+            return
+
         media = self._sync_media_from_tab()
 
         if media == "2":
@@ -785,8 +902,121 @@ class EcoInputGUI:
     # ──────────────────────────────────────────────
     # 백그라운드 실행
     # ──────────────────────────────────────────────
+    # ──────────────────────────────────────────────
+    # 검토 (eco_check) — 기존 eco_check_gui와 동일 흐름
+    # ──────────────────────────────────────────────
+    def _start_check(self):
+        login_id = self.entry_id.get().strip()
+        login_pw = self.entry_pw.get().strip()
+        day = self.entry_date.get().strip()
+
+        selected_teams = [str(i) for i in range(1, 6) if self.team_vars[i].get() == 1]
+        team_input = ",".join(selected_teams)
+
+        if not login_id or not login_pw or not day:
+            messagebox.showwarning("입력 오류", "ID / PW / 날짜는 필수입니다.", parent=self.root)
+            return
+        if parse_ymd_date(day) is None:
+            messagebox.showwarning("날짜 오류", "날짜 형식이 잘못되었습니다.\n(YYYY-MM-DD)", parent=self.root)
+            return
+        if not messagebox.askyesno(
+            "확인",
+            f"[검토]\n날짜: {day}\n팀: {team_input if team_input else '전체'}\n\n실행할까요?",
+            parent=self.root,
+        ):
+            return
+
+        self.cancel_event = threading.Event()
+        self._set_run_kind_enabled(False)
+        self.start_btn.config(state="disabled", text="실행 중...")
+        self.cancel_btn.config(state="normal")
+        self.progress_bar.config(mode="determinate", value=0)
+        self.progress_var.set("준비 중...")
+
+        answers = [login_id, login_pw, day, day, team_input]
+
+        def worker():
+            import builtins
+            old_input = builtins.input
+            seq = iter(answers)
+
+            def fake_input(prompt=""):
+                try:
+                    return next(seq)
+                except StopIteration:
+                    if "직접 입력" in prompt or "로그인 후 엔터" in prompt:
+                        self.root.after(0, lambda: messagebox.showinfo(
+                            "수동 확인",
+                            f"{prompt}\n\n브라우저에서 처리 후 확인을 누르세요.",
+                            parent=self.root,
+                        ))
+                    return ""
+
+            builtins.input = fake_input
+            run_session = None
+            try:
+                import eco_check  # lazy import (tkdnd DLL 충돌 방지)
+                from log_utils import start_run_log
+                run_session = start_run_log("eco_check_gui")
+                original_stdout = sys.stdout
+
+                class ProgressMonitor:
+                    def __init__(self, original, root, btn):
+                        self.original = original
+                        self.root = root
+                        self.btn = btn
+
+                    def write(self, text):
+                        self.original.write(text)
+                        if "팀 데이터" in text or "처리" in text or "저장" in text:
+                            msg = text.strip()[:30]
+                            if msg:
+                                self.root.after(0, lambda m=msg: self.btn.config(text=m))
+
+                    def flush(self):
+                        self.original.flush()
+
+                sys.stdout = ProgressMonitor(original_stdout, self.root, self.start_btn)
+
+                def progress_cb(cur, total):
+                    percent = (cur / total) * 100 if total else 0
+                    self.root.after(0, lambda: (
+                        self.progress_bar.config(value=percent),
+                        self.progress_var.set(f"진행: {cur} / {total}")
+                    ))
+
+                try:
+                    eco_check.main(progress_callback=progress_cb, cancel_event=self.cancel_event)
+                finally:
+                    sys.stdout = original_stdout
+
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                msg = str(e)
+                self.root.after(0, lambda: messagebox.showerror("오류", msg, parent=self.root))
+            finally:
+                builtins.input = old_input
+                try:
+                    from log_utils import stop_run_log
+                    stop_run_log(run_session)
+                except Exception:
+                    pass
+                cancelled = self.cancel_event.is_set()
+                self.root.after(0, lambda: (
+                    self.start_btn.config(state="normal", text="검토 시작"),
+                    self.cancel_btn.config(state="disabled"),
+                    self.progress_var.set("취소됨" if cancelled else "완료"),
+                    self.progress_bar.config(value=0 if cancelled else 100),
+                    self._set_run_kind_enabled(True),
+                ))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _run_automation(self, answers):
         self.cancel_event = threading.Event()
+        self._set_run_kind_enabled(False)
+        self.progress_var.set("")
         self.start_btn.config(state="disabled", text="준비 중...")
         self.cancel_btn.config(state="normal")
         self.progress_bar.config(mode="indeterminate")
@@ -877,7 +1107,8 @@ class EcoInputGUI:
                 self.root.after(0, lambda: (
                     self.start_btn.config(state="normal", text="자동 입력 시작"),
                     self.cancel_btn.config(state="disabled"),
-                    self.progress_bar.stop()
+                    self.progress_bar.stop(),
+                    self._set_run_kind_enabled(True),
                 ))
 
         threading.Thread(target=worker, daemon=True).start()

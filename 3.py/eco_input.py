@@ -274,6 +274,13 @@ _EXCEL_APP = None
 # RealGrid 예외 규칙 → measin_constants.py 에서 import 완료
 # =====================================================================
 
+def _strip_seconds(t) -> str:
+    """'09:05:21' → '09:05' (초는 버림). 형식이 다르면 원문 그대로."""
+    s = "" if t is None else str(t).strip()
+    m = re.match(r"^(\d{1,2}):(\d{2}):\d{2}(\.\d+)?$", s)
+    return f"{int(m.group(1)):02d}:{m.group(2)}" if m else s
+
+
 def rg2_fill_measure_grid_api(driver, sample_no: str, per_item: dict):
     """RealGrid API로 직접 입력 (js 모듈화 완료)"""
     date_str = sample_to_datestr(sample_no)
@@ -282,8 +289,8 @@ def rg2_fill_measure_grid_api(driver, sample_no: str, per_item: dict):
 
     payload = []
     for item_name, v in per_item.items():
-        st = v.get("시작시간", "")
-        et = v.get("종료시간", "")
+        st = _strip_seconds(v.get("시작시간", ""))
+        et = _strip_seconds(v.get("종료시간", ""))
         vol = v.get("시료채취량", "")
         spd = v.get("흡인속도", "")
         vol_u = v.get("채취량단위", "L")
@@ -1135,19 +1142,43 @@ def fill_tab2(d, data, is_dust):
     set_wind(d, data["풍향"])
     sv("input.meas_wspd", data["풍속"])
 
-    sv(SEL_START_TIME, data["채취시작"])
-    sv(SEL_END_TIME, data["채취끝"])
+    sv(SEL_START_TIME, _strip_seconds(data["채취시작"]))
+    sv(SEL_END_TIME, _strip_seconds(data["채취끝"]))
 
     if not is_dust:
         set_basis_o2c(d, data.get("표준산소농도"))
         sv(SEL_O2_MEAS, data["실측산소농도"])
-        sv(SEL_GAS_VOL_PRE, data["배출가스유량전"])
-        sv(SEL_GAS_VOL_POST, data["배출가스유량후"])
+        set_gas_flow(d, "#meas_gas_fvol_yn", SEL_GAS_VOL_PRE, data["배출가스유량전"], "보정전")
+        set_gas_flow(d, "#meas_gas_fvol_o2_aft_yn", SEL_GAS_VOL_POST, data["배출가스유량후"], "보정후")
         sv(SEL_MOISTURE, data["수분량"])
         sv(SEL_GAS_TEMP, data["배출가스온도"])
         sv(SEL_GAS_SPEED, data["배출가스유속"])
 
     print("✅ 탭2 입력 완료")
+
+
+def set_gas_flow(driver, chk_sel, input_sel, value, label):
+    """유량 값이 있으면 체크박스 해제 후 입력, 없으면 체크박스 체크 (체크 = 유량 없음)."""
+    val = "" if value is None else str(value).strip()
+    has_value = val not in ("", "-")
+    try:
+        chk = driver.find_element(By.CSS_SELECTOR, chk_sel)
+        checked = driver.execute_script("return !!arguments[0].checked;", chk)
+        if checked == has_value:
+            driver.execute_script("arguments[0].click();", chk)
+            time.sleep(0.2)
+            print(f"  → 유량({label}) 체크박스 {'해제' if has_value else '체크'}")
+    except Exception as e:
+        print(f"⚠ 유량({label}) 체크박스 처리 실패: {e}")
+    if not has_value:
+        return
+    try:
+        e = driver.find_element(By.CSS_SELECTOR, input_sel)
+        e.clear()
+        e.send_keys(val)
+        wait(0.1)
+    except Exception as e:
+        print(f"⚠ 유량({label}) 입력 실패: {e}")
 
 
 def ensure_gas_flow_checkbox_checked(driver, selector="#meas_gas_fvol_yn"):
@@ -1817,7 +1848,7 @@ def make_tab4_pdfs(excel_path: str, sample_no: str, *, copy_to_nas: bool = True)
         gw_src.append(pdf_record)
     if has_extra and os.path.isfile(pdf_extra):
         gw_src.append(pdf_extra)
-    pdf_groupware = os.path.join(tmp_dir, f"{sample_no}__그룹웨어.pdf")
+    pdf_groupware = os.path.join(tmp_dir, f"{sample_no}.pdf")
     if len(gw_src) >= 2:
         merge_pdfs(gw_src, pdf_groupware)
     elif gw_src:
@@ -2201,8 +2232,8 @@ def fill_tab2_realgird(driver, excel_path, sample_no, grid_root_css):
         if not tr:
             continue
 
-        st = v.get("시작시간", "")
-        et = v.get("종료시간", "")
+        st = _strip_seconds(v.get("시작시간", ""))
+        et = _strip_seconds(v.get("종료시간", ""))
         vol = v.get("시료채취량", "")
         vol_u = v.get("채취량단위", "L")
         spd = v.get("흡인속도", "")

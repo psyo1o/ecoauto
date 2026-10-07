@@ -91,9 +91,9 @@ Windows 전용인 이유는 다음 기능을 사용하기 때문이다.
 
 | 런처 버튼 | 실행되는 Python 파일 | 용도 |
 |------|------|------|
-| 1. 측정인 자동입력 | `3.py\eco_input_gui.py` | 측정인.kr 자동 입력, 백데이터, 탭4 PDF, 그룹웨어 연동(대기·옵션) |
+| 1. 측정인 자동입력 · 검토 | `3.py\eco_input_gui.py` | 측정인.kr 자동 입력, 백데이터, 탭4 PDF, 그룹웨어 연동(대기·옵션) + **검토**(실행 구분에서 선택) |
 | 8. 그룹웨어 전송(재전송,직접) | `3.py\groupware_resend_gui.py` | 그룹웨어 기간 재전송·성적서 직접 전송 |
-| 2. 측정인 검토 | `3.py\eco_check_gui.py` | 사이트 값과 엑셀 값 비교 검토 |
+| (통합됨) 측정인 검토 | `3.py\eco_check_gui.py` | 런처 버튼 삭제 — 1번 창의 '실행 구분 → 검토'로 실행 (단독 실행 파일은 남겨 둠) |
 | 3. 발송대장 검토 | `3.py\receipt.py` | 발송대장 기준 상태 점검 |
 | 4. 종합 검토 | `3.py\dash.py` | 여러 검토 결과를 종합한 대시보드 생성 |
 | 5. 성적서 검토 | `3.py\report_check_gui.py` | 성적서 파일 자체 무결성 검사 |
@@ -405,6 +405,11 @@ PDF 생성·업로드 순서 (`make_tab4_pdfs_water` → `upload_tab4_pdfs`):
 수정 시 같이 볼 파일: `format_utils.py`, `excel_utils.py`, `measin_constants.py` (`SEL_EMIS_FAC`), `eco_input.py` (`fill_tab1`), `eco_check.py` (`compare_list` / 측정시설)
 
 ### 4-2. 측정인 검토
+
+실행 방법: 런처 `1. 측정인 자동입력 · 검토` → 상단 **실행 구분: 검토** 선택 → 팀·날짜 입력 → `검토 시작`
+- 검토는 대기 · 팀+날짜 전용이라 수질 탭, 작업/모드 선택, 탭1·2·4 체크박스는 비활성화됨
+- 동작·로그(`*_eco_check_gui.log`)·결과 엑셀은 기존 `eco_check_gui.py`와 동일 (`eco_check.main` 그대로 호출)
+- 실행 중에는 입력/검토 전환 불가 (브라우저 하나 공유)
 
 사용 상황:
 

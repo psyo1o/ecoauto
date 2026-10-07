@@ -717,18 +717,26 @@ def go_back_to_list(driver,
         ]
 
     btn = None
-    for sel in btn_selectors:
-        try:
-            btn = WebDriverWait(driver, 3).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, sel))
-            )
+    for attempt in range(3):
+        for sel in btn_selectors:
+            try:
+                btn = WebDriverWait(driver, 3 if attempt == 0 else 1).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, sel))
+                )
+                break
+            except Exception:
+                continue
+        if btn is not None:
             break
-        except Exception:
-            continue
+        if is_field_list_ready(driver):
+            print("▶ 이미 목록 화면")
+            return True
+        accept_all_alerts(driver, total_wait=1.0)
+        time.sleep(1.5)
 
     if btn is None:
-        print("⚠ 목록 복귀 버튼 없음 (이미 목록일 수 있음)")
-        return True
+        print("⚠ 목록 복귀 버튼 없음 (목록 화면도 아님)")
+        return False
 
     try:
         driver.execute_script("arguments[0].scrollIntoView(true);", btn)
