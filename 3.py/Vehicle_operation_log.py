@@ -601,10 +601,14 @@ def write_report(rows, drive_list):
 ###############################################################
 # 9) GUI
 ###############################################################
+import os
+import traceback
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import threading
 import queue
+
+from gui_common import LogPanel
 
 
 def gui_start():
@@ -614,6 +618,10 @@ def gui_start():
     daejang_path = tk.StringVar()
     drive_path = tk.StringVar()
     eng_path = tk.StringVar()
+    # 화면 칸에는 파일명만, 실제 경로는 *_path에 보관
+    daejang_name = tk.StringVar()
+    drive_name = tk.StringVar()
+    eng_name = tk.StringVar()
     status = tk.StringVar(value="파일을 선택하세요.")
 
     def choose_daejang():
@@ -622,7 +630,10 @@ def gui_start():
             initialdir=DEFAULT_DAEJANG_DIR,
             filetypes=[("Excel Files","*.xlsx;*.xls;*.xlsm")]
         )
-        if p: daejang_path.set(p)
+        if p:
+            daejang_path.set(p)
+            daejang_name.set(os.path.basename(p))
+            print(f"[선택] 대장 파일: {p}")
 
     def choose_drive():
         p = filedialog.askopenfilename(
@@ -630,7 +641,10 @@ def gui_start():
             initialdir=DEFAULT_DRIVE_LOG_DIR,
             filetypes=[("Excel Files","*.xlsx;*.xls;*.xlsm")]
         )
-        if p: drive_path.set(p)
+        if p:
+            drive_path.set(p)
+            drive_name.set(os.path.basename(p))
+            print(f"[선택] 운행일지: {p}")
 
     def choose_eng():
         p = filedialog.askopenfilename(
@@ -638,7 +652,10 @@ def gui_start():
             initialdir=DEFAULT_ENGINEER_DIR,
             filetypes=[("Excel Files","*.xlsx;*.xls;*.xlsm")]
         )
-        if p: eng_path.set(p)
+        if p:
+            eng_path.set(p)
+            eng_name.set(os.path.basename(p))
+            print(f"[선택] 기술인력 파일: {p}")
 
 
     # 작업 결과를 UI 스레드로 전달하기 위한 큐
@@ -646,24 +663,40 @@ def gui_start():
 
     def worker(dae_path, drv_path, eng_path):
         """무거운 작업은 여기서 실행 (백그라운드 스레드)."""
+        def step(msg):
+            print(f"▶ {msg}")
+            q.put(("PROG", msg))
+
         try:
-            q.put(("PROG", "1/5 대장 읽는 중…"))
+            print("=== 차량운행일지 검토 시작 ===")
+            print(f"  대장: {dae_path}")
+            print(f"  운행일지: {drv_path}")
+            print(f"  기술인력: {eng_path}")
+
+            step("1/5 대장 읽는 중…")
             dae = parse_daejang(dae_path)
+            print(f"  → 대장 {len(dae)}건")
 
-            q.put(("PROG", "2/5 운행일지 읽는 중…"))
+            step("2/5 운행일지 읽는 중…")
             drv = parse_drive_log(drv_path)
+            print(f"  → 운행일지 {len(drv)}건")
 
-            q.put(("PROG", "3/5 기술인력파일 읽는 중…"))
+            step("3/5 기술인력파일 읽는 중…")
             eng = parse_engineer_file(eng_path)
+            print(f"  → 기술인력 {len(eng)}건")
 
-            q.put(("PROG", "4/5 비교 로직 실행 중…"))
+            step("4/5 비교 로직 실행 중…")
             rows = compare_all(dae, drv, eng)
+            print(f"  → 비교 결과 {len(rows)}행")
 
-            q.put(("PROG", "5/5 결과 엑셀 저장 중…"))
+            step("5/5 결과 엑셀 저장 중…")
             out = write_report(rows, drv)
 
+            print(f"✅ 검사 완료: {out}")
             q.put(("OK", out))
         except Exception as e:
+            print(f"❌ 실행 중 오류: {e}")
+            traceback.print_exc()
             q.put(("ERR", str(e)))
 
     def poll_queue():
@@ -725,17 +758,17 @@ def gui_start():
     frm.pack(pady=10)
 
     tk.Label(frm,text="대장 파일").grid(row=0,column=0)
-    tk.Entry(frm,textvariable=daejang_path,width=45).grid(row=0,column=1)
+    tk.Entry(frm,textvariable=daejang_name,width=45,state="readonly").grid(row=0,column=1)
     btn_d1 = tk.Button(frm, text="찾기", command=choose_daejang)
     btn_d1.grid(row=0, column=2)
 
     tk.Label(frm,text="운행일지").grid(row=1,column=0)
-    tk.Entry(frm,textvariable=drive_path,width=45).grid(row=1,column=1)
+    tk.Entry(frm,textvariable=drive_name,width=45,state="readonly").grid(row=1,column=1)
     btn_d2 = tk.Button(frm, text="찾기", command=choose_drive)
     btn_d2.grid(row=1, column=2)
 
     tk.Label(frm,text="기술인력 파일").grid(row=2,column=0)
-    tk.Entry(frm,textvariable=eng_path,width=45).grid(row=2,column=1)
+    tk.Entry(frm,textvariable=eng_name,width=45,state="readonly").grid(row=2,column=1)
     btn_d3 = tk.Button(frm, text="찾기", command=choose_eng)
     btn_d3.grid(row=2, column=2)
 
@@ -743,6 +776,17 @@ def gui_start():
     btn_run.pack(pady=15)
     tk.Label(root,textvariable=status,fg="blue").pack()
 
+    log_frame = tk.LabelFrame(root, text="로그", padx=6, pady=6)
+    log_frame.pack(fill="both", expand=True, padx=10, pady=(8, 10))
+    log_panel = LogPanel(log_frame, height=12)
+    log_panel.start_pumping()
+
+    def on_close():
+        log_panel.restore_stdio()
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_close)
+    root.minsize(560, 420)
     root.mainloop()
 
 
@@ -750,4 +794,10 @@ def gui_start():
 # 실행부
 ###############################################################
 if __name__ == "__main__":
-    gui_start()
+    from log_utils import run_log, log_error
+    try:
+        with run_log("vehicle_log"):
+            gui_start()
+    except Exception as e:
+        log_error("Vehicle_operation_log.main", e)
+        raise

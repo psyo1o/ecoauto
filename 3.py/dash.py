@@ -696,9 +696,10 @@ class DashGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("발송대장/측정인 종합 검토")
-        self.root.geometry("860x620")
-        self.root.minsize(820, 560)
+        self.root.geometry("720x540")
+        self.root.minsize(640, 460)
 
+        self.send_path = ""
         self.review_paths: List[str] = []
         self.result_queue: "queue.Queue[Tuple[Any, ...]]" = queue.Queue()
         self._is_running = False
@@ -725,14 +726,32 @@ class DashGUI:
         file_frame.columnconfigure(1, weight=1)
 
         ttk.Label(file_frame, text="대장검토 파일").grid(row=0, column=0, sticky="w", padx=5, pady=6)
-        ttk.Entry(file_frame, textvariable=self.var_send, width=70).grid(row=0, column=1, sticky="ew", padx=5, pady=6)
+        ttk.Entry(file_frame, textvariable=self.var_send, width=40, state="readonly").grid(row=0, column=1, sticky="ew", padx=5, pady=6)
         self.btn_pick_send = ttk.Button(file_frame, text="대장검토 파일 찾기", command=self._choose_send)
-        self.btn_pick_send.grid(row=0, column=2, padx=5, pady=6)
+        self.btn_pick_send.grid(row=0, column=2, sticky="ew", padx=5, pady=6)
 
-        ttk.Label(file_frame, text="측정인검토 파일(여러개)").grid(row=1, column=0, sticky="w", padx=5, pady=6)
-        ttk.Entry(file_frame, textvariable=self.var_review, width=70, state="readonly").grid(row=1, column=1, sticky="ew", padx=5, pady=6)
-        self.btn_pick_review = ttk.Button(file_frame, text="측정인검토 파일 선택", command=self._choose_review)
-        self.btn_pick_review.grid(row=1, column=2, padx=5, pady=6)
+        review_lbl = ttk.Frame(file_frame)
+        review_lbl.grid(row=1, column=0, sticky="nw", padx=5, pady=6)
+        ttk.Label(review_lbl, text="측정인검토 파일(여러개)").pack(anchor="w")
+        ttk.Label(review_lbl, textvariable=self.var_review, foreground="gray").pack(anchor="w")
+
+        review_box = ttk.Frame(file_frame)
+        review_box.grid(row=1, column=1, sticky="ew", padx=5, pady=6)
+        review_box.columnconfigure(0, weight=1)
+        self.lst_review = tk.Listbox(review_box, height=5, activestyle="none", selectmode="extended")
+        self.lst_review.grid(row=0, column=0, sticky="ew")
+        review_sb = ttk.Scrollbar(review_box, orient="vertical", command=self.lst_review.yview)
+        review_sb.grid(row=0, column=1, sticky="ns")
+        self.lst_review.configure(yscrollcommand=review_sb.set)
+
+        review_btns = ttk.Frame(file_frame)
+        review_btns.grid(row=1, column=2, sticky="new", padx=5, pady=6)
+        self.btn_pick_review = ttk.Button(review_btns, text="측정인검토 파일 선택", command=self._choose_review)
+        self.btn_pick_review.pack(fill="x")
+        self.btn_review_del = ttk.Button(review_btns, text="선택 삭제", command=self._remove_review_selected)
+        self.btn_review_del.pack(fill="x", pady=(4, 0))
+        self.btn_review_clear = ttk.Button(review_btns, text="전체 비우기", command=self._clear_review)
+        self.btn_review_clear.pack(fill="x", pady=(4, 0))
 
         action_frame = ttk.Frame(outer)
         action_frame.grid(row=1, column=0, sticky="ew", pady=(12, 0))
@@ -752,7 +771,7 @@ class DashGUI:
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
 
-        self.log_panel = LogPanel(log_frame, height=20)
+        self.log_panel = LogPanel(log_frame, height=12)
         self.log_panel.grid(row=0, column=0, sticky="nsew")
         self.log_panel.start_pumping()
 
@@ -770,8 +789,9 @@ class DashGUI:
         )
         if not path:
             return
-        self.var_send.set(path)
-        print(f"[선택] 대장검토 파일: {os.path.basename(path)}")
+        self.send_path = path
+        self.var_send.set(os.path.basename(path))
+        print(f"[선택] 대장검토 파일: {path}")
 
     def _choose_review(self):
         paths = askopenfilenames(
@@ -782,20 +802,46 @@ class DashGUI:
         if not paths:
             return
         self.review_paths = list(paths)
-        self.var_review.set(f"{len(self.review_paths)}개 선택됨")
+        self._refresh_review_list()
         print(f"[선택] 측정인 검토 파일 {len(self.review_paths)}개")
         for path in self.review_paths:
-            print(f"  - {os.path.basename(path)}")
+            print(f"  - {path}")
+
+    def _refresh_review_list(self):
+        self.var_review.set(f"{len(self.review_paths)}개 선택됨")
+        self.lst_review.delete(0, "end")
+        for path in self.review_paths:
+            self.lst_review.insert("end", os.path.basename(path))
+
+    def _remove_review_selected(self):
+        sel = set(self.lst_review.curselection())
+        if not sel:
+            showinfo("안내", "목록에서 지울 파일을 선택하세요. (Ctrl/Shift로 여러 개)")
+            return
+        removed = [p for i, p in enumerate(self.review_paths) if i in sel]
+        self.review_paths = [p for i, p in enumerate(self.review_paths) if i not in sel]
+        self._refresh_review_list()
+        for p in removed:
+            print(f"[삭제] 측정인 검토 파일: {p}")
+
+    def _clear_review(self):
+        if not self.review_paths:
+            return
+        self.review_paths = []
+        self._refresh_review_list()
+        print("[삭제] 측정인 검토 파일 목록 비움")
 
     def _set_running(self, running: bool):
         self._is_running = running
         state = "disabled" if running else "normal"
         self.btn_pick_send.config(state=state)
         self.btn_pick_review.config(state=state)
+        self.btn_review_del.config(state=state)
+        self.btn_review_clear.config(state=state)
         self.btn_start.config(state=state, text="실행 중..." if running else "검사 시작")
 
     def _on_start(self):
-        send_path = self.var_send.get().strip()
+        send_path = self.send_path.strip()
         review_paths = list(self.review_paths)
 
         if not send_path:
@@ -815,6 +861,8 @@ class DashGUI:
         print("[시작] 종합 검토 생성")
         print(f"[입력] 대장검토 파일: {send_path}")
         print(f"[입력] 측정인 검토 파일 수: {len(review_paths)}")
+        for p in review_paths:
+            print(f"  - {p}")
 
         thread = threading.Thread(target=self._worker, args=(send_path, review_paths), daemon=True)
         thread.start()

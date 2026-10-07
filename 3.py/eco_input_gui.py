@@ -78,6 +78,19 @@ def _extract_sample_from_name(path_or_text: str) -> str:
     return common_extract_sample_from_name(path_or_text)
 
 
+def _parse_sample_input(s: str):
+    """eco_input.parse_sample_input와 동일. 파일 추가 때 eco_input(무거운 import)을 부르지 않기 위해 둠."""
+    if not s:
+        return []
+    out, seen = [], set()
+    for p in re.split(r"[,\s]+", s.strip()):
+        p = p.strip()
+        if p and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
 class EcoInputGUI:
     """측정인 자동 입력 GUI"""
 
@@ -684,8 +697,7 @@ class EcoInputGUI:
         paths = filedialog.askopenfilenames(**dlg_kw)
         if not paths:
             return
-        import eco_input as _eco
-        existing = _eco.parse_sample_input(text_widget.get("1.0", "end"))
+        existing = _parse_sample_input(text_widget.get("1.0", "end"))
         samples = list(existing)
         added = 0
         for p in paths:
@@ -693,6 +705,11 @@ class EcoInputGUI:
             if sn and sn not in samples:
                 samples.append(sn)
                 added += 1
+                print(f"[파일 추가] {sn}  ←  {p}")
+            elif not sn:
+                print(f"[파일 추가] 시료번호 못 찾음: {p}")
+        if added:
+            print(f"[파일 추가] {added}개 추가 (총 {len(samples)}개)")
         if added == 0:
             messagebox.showwarning("파일 추가", "파일명에서 시료번호를 찾지 못했습니다.", parent=self.root)
             return
@@ -715,17 +732,22 @@ class EcoInputGUI:
         if not paths:
             return
 
-        import eco_input as _eco  # lazy import
-        existing = _eco.parse_sample_input(text_widget.get("1.0", "end"))
+        existing = _parse_sample_input(text_widget.get("1.0", "end"))
         samples = list(existing)
         added = 0
 
         for path in paths:
             sample_no = _extract_sample_from_name(path)
-            if not sample_no or sample_no in samples:
+            if not sample_no:
+                print(f"[드래그&드롭] 시료번호 못 찾음: {path}")
+                continue
+            if sample_no in samples:
                 continue
             samples.append(sample_no)
             added += 1
+            print(f"[드래그&드롭] {sample_no}  ←  {path}")
+        if added:
+            print(f"[드래그&드롭] {added}개 추가 (총 {len(samples)}개)")
 
         if added == 0:
             messagebox.showwarning("드래그&드롭", "드롭한 파일명에서 시료번호를 찾지 못했습니다.", parent=self.root)
@@ -775,25 +797,6 @@ class EcoInputGUI:
 
         if not messagebox.askyesno("실행 확인", "지금 실행할까요?", parent=self.root):
             return
-
-        if self.media_var.get() == "2":
-            import eco_input as _eco
-            raw = self.txt_samples_water.get("1.0", "end").strip()
-            samples = _eco.parse_sample_input(raw)
-            missing = [
-                sn for sn in samples
-                if not _eco.find_sample_file_in_water_nas(sn)
-            ]
-            if missing:
-                preview = "\n".join(missing[:8])
-                if len(missing) > 8:
-                    preview += f"\n… 외 {len(missing) - 8}개"
-                if not messagebox.askyesno(
-                    "파일 없음",
-                    f"아래 시료는\n{WATER_REPORT_INPUT}\n에서 성적서를 찾지 못했습니다.\n\n{preview}\n\n그래도 실행할까요?",
-                    parent=self.root,
-                ):
-                    return
 
         self._run_automation(answers)
 
@@ -1022,6 +1025,13 @@ class EcoInputGUI:
         self.progress_bar.config(mode="indeterminate")
         self.progress_bar.start(10)
 
+        if answers.get("media") == "2":
+            run_samples = _parse_sample_input(self.txt_samples_water.get("1.0", "end"))
+        elif self.mode_var.get() == "1":
+            run_samples = _parse_sample_input(self.txt_samples_air.get("1.0", "end"))
+        else:
+            run_samples = []
+
         def worker():
             run_session = None
             try:
@@ -1029,6 +1039,8 @@ class EcoInputGUI:
                 from log_utils import start_run_log, stop_run_log
 
                 run_session = start_run_log("eco_input")
+                if run_samples:
+                    print(f"▶ 등록 시료 {len(run_samples)}개: {', '.join(run_samples)}")
                 log_writer = sys.stdout
 
                 class ProgressMonitor:

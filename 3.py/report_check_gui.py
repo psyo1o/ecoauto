@@ -129,11 +129,6 @@ class ReportCheckFileListGUI:
         self._build_ui()
         self._setup_cleanup()
 
-        if self._dnd_fail_msg:
-            self._log(f"[INFO] 드래그&드롭 비활성화 (원인: {self._dnd_fail_msg})")
-        self._log(f"[INFO] DragDrop 사용: {HAS_DND}")
-        self._log("[INFO] 드래그&드롭이 안 되면 '파일 추가...' 버튼으로 진행하세요.")
-
     # ---------------- UI ----------------
     def _build_ui(self):
         outer = ttk.Frame(self.root, padding=12)
@@ -238,11 +233,11 @@ class ReportCheckFileListGUI:
         self.root.protocol("WM_DELETE_WINDOW", on_close)
 
     def _log(self, msg: str):
+        """로그창 + 4.log 실행 로그 (LogPanel이 stdout을 받아 표시)."""
         try:
-            self.log_panel.write(msg + "\n")
+            print(msg, flush=True)
         except Exception:
             pass
-
     # ---------------- file list ops ----------------
     def _refresh_text(self):
         """self.files 순서대로 시료번호(없으면 파일명)를 Text에 표시."""
@@ -270,6 +265,7 @@ class ReportCheckFileListGUI:
         return list(range(start_line - 1, end_line))
 
     def _add_paths(self, paths):
+        before = len(self.files)
         added = 0
         for p in paths:
             p = p.strip().strip('"')
@@ -297,6 +293,8 @@ class ReportCheckFileListGUI:
         if added:
             self._refresh_text()
             self._log(f"[INFO] 파일 {added}개 추가됨 (총 {len(self.files)}개)")
+            for p in self.files[before:]:
+                self._log(f"  + {p}")
         else:
             self._log("[INFO] 추가된 파일이 없습니다. (중복/확장자/경로 확인)")
 
@@ -315,10 +313,13 @@ class ReportCheckFileListGUI:
         if not idxs:
             messagebox.showinfo("안내", "삭제할 텍스트를 마우스로 선택하세요.", parent=self.root)
             return
+        removed = []
         for i in reversed(idxs):
             if 0 <= i < len(self.files):
-                del self.files[i]
+                removed.append(self.files.pop(i))
         self._refresh_text()
+        for p in reversed(removed):
+            self._log(f"  - {p}")
         self._log(f"[INFO] 선택 삭제 완료 (총 {len(self.files)}개)")
 
     def _clear_all(self):

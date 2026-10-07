@@ -115,8 +115,10 @@ class RunLogSession:
         self._old_out = None
         self._old_err = None
         self._started = False
+        self._pending = ""
 
     def start(self) -> "RunLogSession":
+        """파일은 첫 출력이 있을 때 만든다 (창만 열고 닫으면 로그 파일 없음)."""
         global _active_run
         now = datetime.now()
         folder = _month_folder(now)
@@ -125,11 +127,9 @@ class RunLogSession:
             folder,
             f"{now.strftime('%Y%m%d_%H%M%S')}_{safe}.log",
         )
-        self._fp = open(self.path, "a", encoding="utf-8", buffering=1)
-        self._fp.write(
+        self._pending = (
             f"===== {self.program} 시작 {now.strftime('%Y-%m-%d %H:%M:%S')} =====\n"
         )
-        self._fp.flush()
 
         self._old_out = sys.stdout
         self._old_err = sys.stderr
@@ -140,10 +140,22 @@ class RunLogSession:
         return self
 
     def write(self, text: str) -> None:
-        if not self._fp or not text:
+        if not text or not self._started:
             return
+        text = text if isinstance(text, str) else str(text)
+        if self._fp is None:
+            if not text.strip():
+                self._pending += text
+                return
+            try:
+                self._fp = open(self.path, "a", encoding="utf-8", buffering=1)
+                self._fp.write(self._pending)
+                self._pending = ""
+            except Exception:
+                self._fp = None
+                return
         try:
-            self._fp.write(text if isinstance(text, str) else str(text))
+            self._fp.write(text)
         except Exception:
             pass
 
@@ -158,12 +170,13 @@ class RunLogSession:
         global _active_run
         if not self._started:
             return
-        try:
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.write(f"\n===== {self.program} 종료 {now} =====\n")
-            self.flush()
-        except Exception:
-            pass
+        if self._fp is not None:
+            try:
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.write(f"\n===== {self.program} 종료 {now} =====\n")
+                self.flush()
+            except Exception:
+                pass
         if self._old_out is not None:
             sys.stdout = self._old_out
         if self._old_err is not None:
