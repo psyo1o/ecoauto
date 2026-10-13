@@ -466,6 +466,89 @@ def verify_tab4_list_status(
     return "실패", status
 
 
+_TAB2_ATTACH_JS = r"""
+const fa = document.querySelector('#fileArea');
+if (!fa) return null;
+let cnt = null;
+try {
+  if (window.control && typeof window.control.getFileCount === 'function')
+    cnt = window.control.getFileCount();
+} catch (e) {}
+const names = Array.from(fa.querySelectorAll('ul.irx_filetree_list li'))
+  .map(li => ((li.innerText || '').trim().split('\n')[0] || '').trim())
+  .filter(Boolean);
+return {cnt: cnt, names: names};
+"""
+
+
+def read_tab2_attached_files(driver, timeout: float = 6.0) -> list | None:
+    """
+    탭2(시료채취기록부) 첨부 파일명 목록 (Innorix 업로더 #fileArea).
+    탭2를 연 상태에서 호출. 업로더가 늦게 채워질 수 있어 timeout까지 재시도.
+    Returns: 파일명 리스트 ([] = 없음) / None = 첨부영역 못 찾음
+    """
+    end = time.time() + timeout
+    last = None
+    while True:
+        try:
+            last = driver.execute_script(_TAB2_ATTACH_JS)
+        except Exception:
+            last = None
+        if last and (last.get("names") or (last.get("cnt") or 0) > 0):
+            break
+        if time.time() >= end:
+            break
+        time.sleep(0.5)
+    if not last:
+        return None
+    names = list(last.get("names") or [])
+    cnt = last.get("cnt") or 0
+    if not names and cnt:
+        names = [f"(파일 {cnt}개)"]
+    return names
+
+
+def clear_tab2_attached_files(driver, timeout: float = 5.0) -> bool:
+    """
+    탭2 첨부 전체 삭제 (Innorix control.clearFiles).
+    확인창 '전체 파일을 삭제하시겠습니까?' → '파일을 삭제했습니다.' 자동 확인.
+    Returns: 삭제 후 첨부 0개면 True
+    """
+    try:
+        driver.execute_script("window.control.clearFiles();")
+    except Exception as e:
+        print(f"⚠ 탭2 첨부 삭제 호출 실패: {e}")
+        return False
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            a = driver.switch_to.alert
+            print(f"   ↳ 확인창: {a.text}")
+            a.accept()
+            time.sleep(0.3)
+            continue
+        except Exception:
+            pass
+        try:
+            if driver.execute_script(_TAB2_ATTACH_JS).get("cnt") == 0:
+                break
+        except Exception:
+            pass
+        time.sleep(0.3)
+    else:
+        return False
+    # 삭제 완료 확인창이 늦게 뜨는 경우까지 정리
+    end = time.time() + 1.5
+    while time.time() < end:
+        try:
+            a = driver.switch_to.alert
+            print(f"   ↳ 확인창: {a.text}")
+            a.accept()
+        except Exception:
+            time.sleep(0.2)
+    return True
+
+
 def verify_tab2_list_status(
     driver,
     sample_no: str,

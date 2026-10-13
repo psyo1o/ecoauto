@@ -69,6 +69,9 @@ from measin_utils import (
     MAX_SAMPLE_DETAIL_RETRY,
     collect_samples_from_files,
     verify_tab4_list_status,
+    verify_tab2_list_status,
+    read_tab2_attached_files,
+    clear_tab2_attached_files,
     TAB4_LIST_SUCCESS_STATUS,
     TAB2_LIST_SUCCESS_STATUS,
     LOGIN_URL, FIELD_URL, NAS_BASE, NAS_DIRS
@@ -565,6 +568,22 @@ def _print_list_status_summary(
             if note:
                 line += f"  ({note})"
             print(line)
+    print(f"{'='*51}")
+
+
+def _is_tab2_already_done_status(status: str) -> bool:
+    """목록 상태가 '측정분석결과 …'(입력중/입력완료)면 탭1·2는 이미 끝난 시료."""
+    return "측정분석결과" in re.sub(r"\s+", "", status or "")
+
+
+def _print_tab12_skip_summary(skipped: list):
+    """탭1·2 입력을 건너뛴 시료와 이유."""
+    if not skipped:
+        return
+    print(f"\n{'='*51}")
+    print(f"=== 탭1·2 입력 건너뜀 {len(skipped)}개 ===")
+    for r in skipped:
+        print(f"     - {r['sample']}  {r.get('reason', '')}")
     print(f"{'='*51}")
 
 
@@ -2685,6 +2704,7 @@ def _main_air(
 
     tab4_status_results = []
     tab2_status_results = []
+    tab12_skipped = []
 
     # 드라이버 / 로그인
     driver = None
@@ -2750,8 +2770,25 @@ def _main_air(
                 continue
 
             site_tab2_done = sample in tab2_done_samples
+            skip_entry = None
+            if (do_tab1 or do_tab2) and not site_tab2_done:
+                try:
+                    _, pre_status = verify_tab2_list_status(driver, sample)
+                except Exception:
+                    pre_status = ""
+                if _is_tab2_already_done_status(pre_status):
+                    skip_entry = {
+                        "sample": sample,
+                        "reason": f"목록상태 '{pre_status}' (탭2 입력완료된 시료)",
+                    }
+                    tab12_skipped.append(skip_entry)
+                    tab2_done_samples.add(sample)
+                    site_tab2_done = True
+                    print(f"▶ {sample} 탭1·2 입력 건너뜀: {skip_entry['reason']}")
+
             if site_tab2_done and not do_tab4:
-                print(f"▶ {sample} 탭2 저장/PDF 완료 → 사이트 입력 스킵")
+                if skip_entry is None:
+                    print(f"▶ {sample} 탭2 저장/PDF 완료 → 사이트 입력 스킵")
                 idx += 1
                 continue
 
@@ -2829,7 +2866,18 @@ def _main_air(
 
                             did_pdf = False
                             pdf_path = None
+                            pdf_already = False
                             if do_pdf_upload:
+                                existing = read_tab2_attached_files(driver, timeout=2)
+                                if existing:
+                                    print(f"▶ 탭2 기존 PDF 있음({', '.join(existing)}) → 삭제 후 새로 업로드")
+                                    if clear_tab2_attached_files(driver):
+                                        print("🗑 탭2 기존 PDF 삭제 완료")
+                                    else:
+                                        pdf_already = True
+                                        did_pdf = True
+                                        print("⚠ 탭2 기존 PDF 삭제 실패 → 기존 PDF 유지, 업로드 건너뜀")
+                            if do_pdf_upload and not pdf_already:
                                 try:
                                     pdf_path = export_pdf_from_excel(path, sample, is_dust)
                                     print(f"▶ PDF 생성 완료: {pdf_path}")
@@ -2842,7 +2890,7 @@ def _main_air(
                                 except Exception as e:
                                     print(f"❌ PDF 실패: {e}")
                                     site_input_ok = False
-                            else:
+                            elif not do_pdf_upload:
                                 print("▶ PDF 업로드 스킵")
                             time.sleep(1)
 
@@ -2855,7 +2903,7 @@ def _main_air(
                             )
                             ok = save_tab2(driver, use_final_save=use_final_save)
 
-                            pdf_deleted = False
+                            pdf_deleted = pdf_already
                             if ok and did_pdf and pdf_path and os.path.isfile(pdf_path):
                                 try:
                                     os.remove(pdf_path)
@@ -3031,6 +3079,7 @@ def _main_air(
                 label="대기 탭2 PDF",
                 success_text=TAB2_LIST_SUCCESS_STATUS,
             )
+        _print_tab12_skip_summary(tab12_skipped)
         if do_tab4:
             _print_tab4_status_summary(tab4_status_results, label="대기 탭4")
         return
@@ -3044,6 +3093,7 @@ def _main_air(
             label="대기 탭2 PDF",
             success_text=TAB2_LIST_SUCCESS_STATUS,
         )
+    _print_tab12_skip_summary(tab12_skipped)
     if do_tab4:
         _print_tab4_status_summary(tab4_status_results, label="대기 탭4")
 

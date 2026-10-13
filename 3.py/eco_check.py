@@ -44,6 +44,7 @@ from measin_utils import (
     ensure_detail_page_for_tab1, reopen_sample_from_search,
     ensure_logged_in_or_recover, is_logged_out,
     verify_tab4_list_status,
+    read_tab2_attached_files,
     MAX_SAMPLE_DETAIL_RETRY,
     LOGIN_URL, FIELD_URL, NAS_BASE, NAS_DIRS
 )
@@ -130,37 +131,39 @@ def init_driver():
     return d
 
 
-def _wait_new_pdf(download_dir, before_set, timeout=60):
+def _wait_new_pdfs(download_dir, before_set, expected=None, timeout=60):
     """
-    클릭 직전(before_set) 대비 새로 생긴 PDF를 찾아서
-    .crdownload가 사라지고 완성된 파일만 반환
+    클릭 직전(before_set) 대비 새로 생긴 완성 PDF 목록.
+    expected(탭2 첨부 개수)가 있으면 그 개수가 다 받아질 때까지 대기,
+    없으면 첫 PDF 이후 2초간 더 생기는 파일이 없을 때 반환.
     """
     t0 = time.time()
+    found = []
+    stable_since = None
 
     while time.time() - t0 < timeout:
-        now = set(os.listdir(download_dir))
-
-        # 새로 생긴 파일 후보
-        added = list(now - before_set)
-
-        # 크롬 다운로드 진행중이면 .crdownload 존재
+        added = list(set(os.listdir(download_dir)) - before_set)
         crs = [f for f in added if f.lower().endswith(".crdownload")]
-        pdfs = [f for f in added if f.lower().endswith(".pdf")]
+        pdfs = sorted(f for f in added if f.lower().endswith(".pdf"))
 
-        if crs:
-            time.sleep(0.3)
-            continue
+        if pdfs != found:
+            found = pdfs
+            stable_since = time.time()
 
-        if pdfs:
-            paths = [os.path.join(download_dir, f) for f in pdfs]
-            latest = max(paths, key=os.path.getmtime)
-            # 파일 쓰기 마무리 안정화
-            time.sleep(0.5)
-            return latest
-
+        if not crs and found:
+            if expected and len(found) >= expected:
+                time.sleep(0.5)
+                break
+            if not expected and time.time() - stable_since >= 2.0:
+                break
         time.sleep(0.3)
 
-    return ""
+    return [os.path.join(download_dir, f) for f in found]
+
+
+def _pdf_target_names(sample_no, n):
+    """{시료}.pdf, {시료}_2.pdf, {시료}_3.pdf …"""
+    return [f"{sample_no}.pdf" if i == 0 else f"{sample_no}_{i + 1}.pdf" for i in range(n)]
 
 
 # ------------------------------------------------------------
@@ -168,21 +171,34 @@ def _wait_new_pdf(download_dir, before_set, timeout=60):
 # ------------------------------------------------------------
 def download_pdf(driver, sample_no):
     """
-    PDF 다운로드 버튼 클릭 후
-    '이번 클릭으로 새로 생성된 PDF'만 잡아서
-    ...\\3.측정인 검토\\PDF\\{연도}\\{월}\\{sample_no}.pdf 로 저장
+    탭2 '전체 다운로드' → 첨부 PDF 전부 받아서
+    ...\\3.측정인 검토\\PDF\\{연도}\\{월}\\{sample_no}.pdf, {sample_no}_2.pdf … 로 저장.
+    (Innorix 전체 다운로드는 파일별로 원래 이름 그대로 받아짐)
+    Returns: 저장된 경로 리스트 (첨부 순서)
     """
     print(f"   [PDF] 다운로드 시도: {sample_no}")
 
     out_dir = media_dir_for_sample("PDF", sample_no)
-    target_path = os.path.join(out_dir, f"{sample_no}.pdf")
     pdf_btn_sel = "#fileArea > section > div > div.row.fr > input:nth-child(3)"
 
-    if os.path.isfile(target_path):
-        try:
-            os.remove(target_path)
-        except Exception:
-            pass
+    attached = read_tab2_attached_files(driver, timeout=3)
+    if attached == []:
+        print("   ❌ 탭2 첨부 PDF 없음")
+        return []
+    expected = len(attached) if attached else None
+    if expected and expected > 1:
+        print(f"   [PDF] 첨부 {expected}개: {', '.join(attached)}")
+
+    old_re = re.compile(rf"^{re.escape(sample_no)}(_\d+)?\.pdf$", re.IGNORECASE)
+    try:
+        for f in os.listdir(out_dir):
+            if old_re.match(f):
+                try:
+                    os.remove(os.path.join(out_dir, f))
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
     try:
         driver.execute_cdp_cmd(
@@ -196,25 +212,50 @@ def download_pdf(driver, sample_no):
         before = set(os.listdir(out_dir))
     except Exception as e:
         print(f"   ❌ PDF_DIR 접근 실패: {e}")
-        return ""
+        return []
 
     if not safe_click(driver, pdf_btn_sel):
         print("   ❌ PDF 버튼 클릭 실패")
-        return ""
+        return []
 
-    new_pdf = _wait_new_pdf(out_dir, before, timeout=60)
-    if not new_pdf or not os.path.isfile(new_pdf):
+    new_pdfs = [p for p in _wait_new_pdfs(out_dir, before, expected, timeout=60)
+                if os.path.isfile(p)]
+    if not new_pdfs:
         print("   ❌ PDF 다운로드 완료/파일 탐지 실패")
-        return ""
+        return []
+    if expected and len(new_pdfs) < expected:
+        print(f"   ⚠ PDF {expected}개 중 {len(new_pdfs)}개만 받아짐")
 
-    try:
-        if os.path.abspath(new_pdf) != os.path.abspath(target_path):
-            os.replace(new_pdf, target_path)
-        print(f"   ✔ PDF 저장: {target_path}")
-        return target_path
-    except Exception as e:
-        print(f"   ❌ PDF 이름 변경 실패: {e}")
-        return new_pdf
+    # 탭2 첨부 순서대로 정렬 (크롬 중복이름 ' (1)' 무시)
+    order = {n.lower(): i for i, n in enumerate(attached or [])}
+
+    def _key(p):
+        base = re.sub(r" \(\d+\)(?=\.pdf$)", "", os.path.basename(p), flags=re.IGNORECASE)
+        return (order.get(base.lower(), len(order)), os.path.getmtime(p))
+
+    new_pdfs.sort(key=_key)
+
+    # 이름이 겹칠 수 있어 임시 이름을 거쳐 최종 이름으로
+    saved = []
+    tmp_paths = []
+    for i, p in enumerate(new_pdfs):
+        tmp = os.path.join(out_dir, f"__dl_{sample_no}_{i}.pdf.tmp")
+        try:
+            os.replace(p, tmp)
+            tmp_paths.append(tmp)
+        except Exception as e:
+            print(f"   ❌ PDF 이름 변경 실패: {e}")
+            tmp_paths.append(p)
+    for tmp, name in zip(tmp_paths, _pdf_target_names(sample_no, len(tmp_paths))):
+        target = os.path.join(out_dir, name)
+        try:
+            os.replace(tmp, target)
+            saved.append(target)
+            print(f"   ✔ PDF 저장: {target}")
+        except Exception as e:
+            print(f"   ❌ PDF 이름 변경 실패: {e}")
+            saved.append(tmp)
+    return saved
 
 
 # ------------------------------------------------------------
@@ -790,10 +831,12 @@ def read_site_data(driver, sample_no):
     click_tab(driver, "ui-id-2")
     time.sleep(0.5)
     try:
-        data["PDF경로"] = download_pdf(driver, sample_no)
+        pdf_paths = download_pdf(driver, sample_no)
     except Exception as e:
         print("⚠ PDF 다운로드 실패:", e)
-        data["PDF경로"] = ""
+        pdf_paths = []
+    data["PDF경로목록"] = pdf_paths
+    data["PDF경로"] = pdf_paths[0] if pdf_paths else ""
     if not data.get("PDF경로"):
         failures.append("pdf")
 
@@ -1570,20 +1613,23 @@ def save_results(sample_rows_map, out_path):
             ])
 
         # PDF 하이퍼링크 행 추가
-        pdf_path = PDF_MAP.get(sample_no, "")
+        pdf_paths = PDF_MAP.get(sample_no) or []
+        if isinstance(pdf_paths, str):
+            pdf_paths = [pdf_paths]
         sum_pdf_row = None
-        if pdf_path:
+        company = COMPANY_MAP.get(sample_no, "")
+        for i, pdf_path in enumerate(pdf_paths):
+            label = "PDF 열기" if i == 0 else f"PDF 열기 ({i + 1})"
             row_idx = ws.max_row + 1
-            ws.cell(row=row_idx, column=1, value="PDF 열기")
+            ws.cell(row=row_idx, column=1, value=label)
             link_cell = ws.cell(row=row_idx, column=2, value=pdf_path)
             link_cell.hyperlink = pdf_path
             link_cell.style = "Hyperlink"
 
             sum_pdf_row = ws_sum.max_row + 1
-            company = COMPANY_MAP.get(sample_no, "")
             ws_sum.cell(row=sum_pdf_row, column=1, value=sample_no)
             ws_sum.cell(row=sum_pdf_row, column=2, value=company)
-            ws_sum.cell(row=sum_pdf_row, column=3, value="PDF 열기")
+            ws_sum.cell(row=sum_pdf_row, column=3, value=label)
             ws_sum.cell(row=sum_pdf_row, column=4, value="OK")
             sum_link_cell = ws_sum.cell(row=sum_pdf_row, column=5, value=pdf_path)
             sum_link_cell.hyperlink = pdf_path
@@ -1813,7 +1859,9 @@ def main(progress_callback=None, cancel_event=None):
                             continue
                         _mark_read_failed(site, read_failures)
 
-                    PDF_MAP[sample_no] = site.get("PDF경로", "")
+                    PDF_MAP[sample_no] = site.get("PDF경로목록") or (
+                        [site["PDF경로"]] if site.get("PDF경로") else []
+                    )
                     PHOTO_MAP[sample_no] = site.get("현장사진") or []
                     xlsx = find_excel_for_sample(sample_no)
                     if not xlsx:
