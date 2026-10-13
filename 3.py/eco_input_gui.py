@@ -49,6 +49,7 @@ except Exception:
 from gui_common import LogPanel, create_scrollable_text
 from data_utils import extract_sample_from_name as common_extract_sample_from_name, parse_ymd_date
 from config import REPORT_BASE, WATER_REPORT_INPUT
+import login_store
 import sys
 
 
@@ -155,15 +156,57 @@ class EcoInputGUI:
 
     # ── 로그인 (공통) ──────────────────────────────
     def _create_login_fields(self):
+        self.save_login_var = tk.BooleanVar(value=False)
+
         ttk.Label(self.input_frame, text="측정인 아이디:").grid(
             row=0, column=0, sticky="e", pady=2)
-        self.entry_id = ttk.Entry(self.input_frame, width=38)
-        self.entry_id.grid(row=0, column=1, sticky="we", pady=2)
-
         ttk.Label(self.input_frame, text="비밀번호:").grid(
             row=1, column=0, sticky="e", pady=2)
-        self.entry_pw = ttk.Entry(self.input_frame, width=38, show="*")
-        self.entry_pw.grid(row=1, column=1, sticky="we", pady=2)
+
+        login_box = ttk.Frame(self.input_frame)
+        login_box.grid(row=0, column=1, rowspan=2, sticky="we")
+        login_box.grid_columnconfigure(0, weight=1)
+        self.entry_id = ttk.Entry(login_box, width=28)
+        self.entry_id.grid(row=0, column=0, sticky="we", pady=2)
+        self.entry_pw = ttk.Entry(login_box, width=28, show="*")
+        self.entry_pw.grid(row=1, column=0, sticky="we", pady=2)
+        self.chk_save_login = ttk.Checkbutton(
+            login_box, text="로그인 정보 저장", variable=self.save_login_var,
+            command=self._on_save_login_toggled)
+        self.chk_save_login.grid(row=0, column=1, rowspan=2, sticky="w", padx=(8, 0))
+
+        self._load_saved_login()
+
+    # ── 아이디/비밀번호 저장 ───────────────────────
+    def _load_saved_login(self):
+        saved = login_store.load()
+        self.save_login_var.set(saved["save_id"])
+        self._fill_saved_login(saved)
+
+    def _fill_saved_login(self, saved=None):
+        """비어 있는 칸만 저장값으로 채움."""
+        saved = saved or login_store.load()
+        if saved["id"] and not self.entry_id.get():
+            self.entry_id.insert(0, saved["id"])
+        if saved["pw"] and not self.entry_pw.get():
+            self.entry_pw.insert(0, saved["pw"])
+
+    def _on_save_login_toggled(self):
+        if not self.save_login_var.get():
+            login_store.clear()
+
+    def _remember_login(self):
+        """실행 시작 시 체크 상태대로 저장."""
+        save = self.save_login_var.get()
+        try:
+            login_store.save(
+                self.entry_id.get().strip(),
+                self.entry_pw.get().strip(),
+                save,
+                save,
+            )
+        except Exception as e:
+            print(f"⚠ 로그인 정보 저장 실패: {e}")
 
     # ── 실행 구분 (입력/검토) ──────────────────────
     def _create_run_kind(self):
@@ -499,12 +542,15 @@ class EcoInputGUI:
         self.entry_id.configure(state="normal")
         self.entry_pw.configure(state="normal")
         if enabled:
+            self.chk_save_login.configure(state="normal")
+            self._fill_saved_login()
             return
         if clear:
             self.entry_id.delete(0, "end")
             self.entry_pw.delete(0, "end")
         self.entry_id.configure(state="disabled")
         self.entry_pw.configure(state="disabled")
+        self.chk_save_login.configure(state="disabled")
 
     def _check_current_air_work_options(self):
         """현재 측정/분석 탭의 선택박스를 모두 켠다."""
@@ -798,6 +844,9 @@ class EcoInputGUI:
         if not messagebox.askyesno("실행 확인", "지금 실행할까요?", parent=self.root):
             return
 
+        if self.entry_id.cget("state") != "disabled":
+            self._remember_login()
+
         self._run_automation(answers)
 
     def _build_answers_water(self) -> dict | None:
@@ -929,6 +978,7 @@ class EcoInputGUI:
         ):
             return
 
+        self._remember_login()
         self.cancel_event = threading.Event()
         self._set_run_kind_enabled(False)
         self.start_btn.config(state="disabled", text="실행 중...")
