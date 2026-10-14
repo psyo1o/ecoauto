@@ -72,6 +72,8 @@ from measin_utils import (
     verify_tab2_list_status,
     read_tab2_attached_files,
     clear_tab2_attached_files,
+    mark_page_before_save,
+    read_tab2_files_after_save,
     TAB4_LIST_SUCCESS_STATUS,
     TAB2_LIST_SUCCESS_STATUS,
     LOGIN_URL, FIELD_URL, NAS_BASE, NAS_DIRS
@@ -460,25 +462,37 @@ def _record_list_status_result(
     label: str = "탭4",
     success_text: str = "",
     note: str = "",
+    pdf=None,
 ):
-    """목록 상태 확인 결과 누적 + 즉시 로그."""
+    """
+    목록 상태 확인 결과 누적 + 즉시 로그.
+    pdf: 저장 후 탭2 첨부 확인 결과 (파일명 리스트 / [] = 미첨부 / None = 확인 안 함)
+    """
+    if pdf == []:
+        note = "; ".join(x for x in (note, "탭2 PDF 미첨부") if x)
+        if result == "성공":
+            result = "실패"
+    # 재시도로 같은 시료를 다시 확인하면 마지막 결과만 남김
+    results[:] = [r for r in results if r.get("sample") != sample]
     results.append({
         "sample": sample,
         "result": result,
         "status": status_text or "",
         "note": note or "",
+        "pdf": pdf,
     })
     expect = success_text or (
         TAB4_LIST_SUCCESS_STATUS if "탭4" in label else TAB2_LIST_SUCCESS_STATUS
     )
+    pdf_txt = f"  PDF: {', '.join(pdf)}" if pdf else ""
     if result == "성공":
-        print(f"✅ {label} 상태확인 성공: {sample} (목록상태='{status_text or expect}')")
+        print(f"✅ {label} 상태확인 성공: {sample} (목록상태='{status_text or expect}'){pdf_txt}")
     else:
         # 실패·확인불가 → 경고. 목록 실제 문구를 우선 표시
         st = (status_text or "").strip() or "(목록상태 확인불가)"
         extra = f"  ({note})" if note else ""
         mark = "⚠" if result == "확인불가" else "❌"
-        print(f"{mark} {label} 상태확인 경고: {sample} → 목록상태='{st}'{extra}")
+        print(f"{mark} {label} 상태확인 경고: {sample} → 목록상태='{st}'{extra}{pdf_txt}")
 
 
 def _record_tab4_status_result(
@@ -506,6 +520,7 @@ def _verify_and_record_list_status(
     success_text: str,
     label: str,
     note: str = "",
+    pdf=None,
 ):
     """목록 복귀 후 RealGrid '상태' 열 확인 → results에 기록."""
     try:
@@ -522,6 +537,7 @@ def _verify_and_record_list_status(
         label=label,
         success_text=success_text,
         note=note,
+        pdf=pdf,
     )
 
 
@@ -551,14 +567,17 @@ def _print_list_status_summary(
     print(f"=== {label} 입력 결과 요약 (목록 '상태' 열) ===")
     print(f"  성공 {len(ok)} / 경고 {len(warn)}  (총 {len(results)})")
     print(f"  성공 기준: '{success_text}'")
+    def _pdf_txt(r):
+        return f"  PDF: {', '.join(r['pdf'])}" if r.get("pdf") else ""
+
     if ok:
         print("  ✅ 성공:")
         for r in ok:
             st = (r.get("status") or "").strip()
             if st:
-                print(f"     - {r['sample']}  (목록상태='{st}')")
+                print(f"     - {r['sample']}  (목록상태='{st}'){_pdf_txt(r)}")
             else:
-                print(f"     - {r['sample']}")
+                print(f"     - {r['sample']}{_pdf_txt(r)}")
     if warn:
         print("  ⚠ 경고:")
         for r in warn:
@@ -567,7 +586,7 @@ def _print_list_status_summary(
             line = f"     - {r['sample']}  목록상태='{st}'"
             if note:
                 line += f"  ({note})"
-            print(line)
+            print(line + _pdf_txt(r))
     print(f"{'='*51}")
 
 
@@ -2802,6 +2821,7 @@ def _main_air(
                 if site_tab2_done:
                     print(f"▶ {sample} 탭2 저장/PDF 완료 → 탭4만 진행")
 
+                tab2_pdf_check = None
                 for sample_attempt in range(1, MAX_SAMPLE_DETAIL_RETRY + 1):
                     if is_cancelled(cancel_event):
                         break
@@ -2840,6 +2860,7 @@ def _main_air(
 
                     site_input_ok = True
                     tab2_status_check_needed = False
+                    tab2_pdf_check = None
                     tab2_save_note = ""
                     try:
                         if do_tab1 and not site_tab2_done:
@@ -2901,7 +2922,20 @@ def _main_air(
                             print(
                                 f"▶ 탭2 {'✅입력완료' if use_final_save else '⚠임시저장'}"
                             )
+                            if did_pdf:
+                                mark_page_before_save(driver)
                             ok = save_tab2(driver, use_final_save=use_final_save)
+
+                            # 저장 누른 뒤 서버에 실제 첨부됐는지 (임시저장·입력완료 공통)
+                            if ok and did_pdf:
+                                tab2_pdf_check = read_tab2_files_after_save(driver)
+                                if tab2_pdf_check is None:
+                                    print("⚠ 탭2 PDF 저장 확인불가 (첨부영역 못 찾음)")
+                                elif tab2_pdf_check:
+                                    print(f"✅ 탭2 PDF 저장 확인: {', '.join(tab2_pdf_check)}")
+                                else:
+                                    print("❌ 탭2 PDF 저장 확인 실패: 저장 후 첨부 파일 없음")
+                                    ok = False
 
                             pdf_deleted = pdf_already
                             if ok and did_pdf and pdf_path and os.path.isfile(pdf_path):
@@ -2927,6 +2961,8 @@ def _main_air(
                                 tab2_status_check_needed = True
                                 if not use_final_save:
                                     tab2_save_note = "탭2 임시저장"
+                            elif do_pdf_upload and did_pdf and tab2_pdf_check == []:
+                                tab2_status_check_needed = True
                             elif do_pdf_upload and not did_pdf:
                                 # PDF 실패여도 목록 실제 상태는 읽어 둠
                                 tab2_status_check_needed = True
@@ -2947,6 +2983,7 @@ def _main_air(
                                 success_text=TAB2_LIST_SUCCESS_STATUS,
                                 label="탭2",
                                 note=tab2_save_note,
+                                pdf=tab2_pdf_check,
                             )
                             if do_tab4 and site_input_ok:
                                 opened = reopen_sample_from_search(

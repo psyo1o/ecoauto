@@ -508,6 +508,37 @@ def read_tab2_attached_files(driver, timeout: float = 6.0) -> list | None:
     return names
 
 
+def mark_page_before_save(driver) -> None:
+    """저장 후 페이지 재로딩 감지용 표시 (재로딩되면 사라짐)."""
+    try:
+        driver.execute_script("window.__ecoPreSave = 1;")
+    except Exception:
+        pass
+
+
+def read_tab2_files_after_save(driver, reload_timeout: float = 10.0) -> list | None:
+    """
+    탭2 저장 → 페이지 재로딩(서버 저장 상태로 다시 그려짐)을 기다린 뒤 첨부 파일명 확인.
+    mark_page_before_save()를 저장 전에 호출해 둬야 재로딩을 구분할 수 있음.
+    Returns: 파일명 리스트 ([] = 미첨부) / None = 확인불가
+    """
+    end = time.time() + reload_timeout
+    reloaded = False
+    while time.time() < end:
+        try:
+            if driver.execute_script(
+                "return document.readyState === 'complete' && window.__ecoPreSave === undefined;"
+            ):
+                reloaded = True
+                break
+        except Exception:
+            pass
+        time.sleep(0.3)
+    if not reloaded:
+        print("   ⚠ 저장 후 화면 재로딩 감지 못함 → 현재 화면 기준으로 첨부 확인")
+    return read_tab2_attached_files(driver, timeout=5.0)
+
+
 def clear_tab2_attached_files(driver, timeout: float = 5.0) -> bool:
     """
     탭2 첨부 전체 삭제 (Innorix control.clearFiles).
